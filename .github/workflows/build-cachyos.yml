@@ -16,88 +16,142 @@ on:
           - linux-cachyos-eevdf
           - linux-cachyos-deckify
         default: linux-cachyos
-      config_files:
-        description: Config overrides (comma-separated, optional)
-        required: false
-        default: ''
+
       enable_lto:
         description: Enable ThinLTO
-        required: false
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
         default: 'true'
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
     container:
       image: archlinux:latest
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      KERNEL_VARIANT: ${{ github.event.inputs.kernel_variant }}
+      ENABLE_LTO: ${{ github.event.inputs.enable_lto }}
 
     steps:
       - name: Initialize pacman
         run: |
+          set -euxo pipefail
           pacman-key --init
           pacman-key --populate archlinux
-          pacman -Sy --noconfirm --needed git nodejs
+          pacman -Syu --noconfirm --needed git nodejs
 
-      - name: Checkout workflow repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
-          pacman -Sy --noconfirm --needed \
-            base-devel fakeroot bc cpio xmlto \
-            flex bison libelf openssl \
-            python-sphinx python-sphinx_rtd_theme wget
+          set -euxo pipefail
+          pacman -S --noconfirm --needed \
+            base-devel fakeroot sudo \
+            bc cpio xmlto flex bison libelf openssl \
+            python-sphinx python-sphinx_rtd_theme \
+            clang lld llvm wget zstd
 
-      - name: Install LLVM/Clang toolchain
+      - name: Clone CachyOS PKGBUILD
         run: |
-          pacman -Sy --noconfirm --needed clang lld llvm
-
-      - name: Clone CachyOS PKGBUILD repo
-        run: |
+          set -euxo pipefail
           git clone --depth 1 https://github.com/CachyOS/linux-cachyos.git cachyos-pkgbuild
+          test -f "cachyos-pkgbuild/$KERNEL_VARIANT/PKGBUILD"
+          test -f "cachyos-pkgbuild/$KERNEL_VARIANT/config"
 
-      - name: Apply custom config overrides
-        if: ${{ github.event.inputs.config_files != '' }}
+      - name: Configure LTO
         run: |
-          cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
-          IFS=',' read -ra CFGS <<< "${{ github.event.inputs.config_files }}"
-          for cfg in "${CFGS[@]}"; do
-            [ -f "$GITHUB_WORKSPACE/$cfg" ] \
-              && cat "$GITHUB_WORKSPACE/$cfg" >> config \
-              || echo "Warning: $cfg not found"
-          done
+          set -euxo pipefail
+          cd "cachyos-pkgbuild/$KERNEL_VARIANT"
 
-      - name: Configure ThinLTO
-        if: ${{ github.event.inputs.enable_lto == 'true' }}
-        run: |
-          cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
-          grep -q '^_use_llvm_lto=' PKGBUILD \
-            && sed -i 's/_use_llvm_lto=.*/_use_llvm_lto="thin"/' PKGBUILD \
-            || echo '_use_llvm_lto="thin"' >> PKGBUILD
+          if [[ "$ENABLE_LTO" == "true" ]]; then
+            LTO_VALUE="thin"
+          else
+            LTO_VALUE="none"
+          fi
+
+          if grep -q '^_use_llvm_lto=' PKGBUILD; then
+            sed -i "s/^_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
+          else
+            echo "_use_llvm_lto=\"$LTO_VALUE\"" >> PKGBUILD
+          fi
 
       - name: Build kernel package
         run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
-          su builder -c "
-            cd \"$GITHUB_WORKSPACE/cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}\"
-            makepkg -s --noconfirm --nocheck
-          "
-          mkdir -p "$GITHUB_WORKSPACE/artifacts"
-          cp -v *.pkg.tar.zst "$GITHUB_WORKSPACE/artifacts/" 2>/dev/null || true
+          set -euxo pipefail
 
-      - name: Extract bzImage
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+          runuser -u builder -- env \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            KERNEL_VARIANT="$KERNEL_VARIANT" \
+            bash -lc '
+              set -e
+              cd "$GITHUB_WORKSPACE/cachyos-pkgbuild/$KERNEL_VARIANT"
+
+              set +o pipefail
+              yes "" | makepkg -s --noconfirm --nocheck
+              status=${PIPESTATUS[1]}
+              set -o pipefail
+
+              exit "$status"
+            '
+
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+
+          shopt -s nullglob
+          packages=(cachyos-pkgbuild/"$KERNEL_VARIANT"/*.pkg.tar.zst)
+
+          if (( ${#packages[@]} == 0 )); then
+            echo "No packages were produced"
+            exit 1
+          fi
+
+          cp -v "${packages[@]}" "$GITHUB_WORKSPACE/artifacts/"
+
+      - name: Extract kernel files
         run: |
+          set -euxo pipefail
           cd "$GITHUB_WORKSPACE/artifacts"
-          PKG=$(ls *.pkg.tar.zst 2>/dev/null | head -1)
-          [ -n "$PKG" ] && tar --zstd -xf "$PKG" -C /tmp/pkg-extract
-          find /tmp/pkg-extract -name bzImage -exec cp -v {} ./ \; 2>/dev/null || true
-          find /tmp/pkg-extract -name System.map -exec cp -v {} ./ \; 2>/dev/null || true
+
+          mkdir -p /tmp/pkg-extract
+
+          PKG="$(
+            find . -maxdepth 1 -type f \
+              -name "$KERNEL_VARIANT-*.pkg.tar.zst" \
+              ! -name "*-headers-*.pkg.tar.zst" \
+              -printf '%f\n' | sort | head -n 1
+          )"
+
+          if [[ -n "$PKG" ]] && tar --zstd -xf "$PKG" -C /tmp/pkg-extract; then
+            find /tmp/pkg-extract -type f -path "*/boot/vmlinuz*" -exec cp -v {} ./ \; || true
+            find /tmp/pkg-extract -type f -name "System.map*" -exec cp -v {} ./ \; || true
+            find /tmp/pkg-extract -type f -name "config*" -exec cp -v {} ./ \; || true
+          fi
+
+          ls -lah
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cachyos-${{ github.event.inputs.kernel_variant }}
           path: artifacts/
+          if-no-files-found: error
+          compression-level: 0
