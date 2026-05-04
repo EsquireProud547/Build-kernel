@@ -20,10 +20,6 @@ on:
         description: Config overrides (comma-separated, optional)
         required: false
         default: ''
-      llvm_url:
-        description: LLVM prebuilt tar.xz URL
-        required: true
-        default: 'https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.4/clang+llvm-22.1.4-x86_64-linux-gnu-ubuntu-20.04.tar.xz'
       enable_lto:
         description: Enable ThinLTO
         required: false
@@ -45,27 +41,6 @@ jobs:
       - name: Checkout workflow repo
         uses: actions/checkout@v4
 
-      - name: Setup swap
-        run: |
-          MEM=$(awk '/MemTotal/{printf "%d",$2/1024}' /proc/meminfo)
-          DISK=$(df / --output=avail | tail -1)
-          SWAP_TARGET=$(( MEM * 2 - MEM ))
-          SWAP_MAX=$(( DISK / 2 ))
-          [ "$SWAP_TARGET" -gt "$SWAP_MAX" ] && SWAP_TARGET=$SWAP_MAX
-          [ "$SWAP_TARGET" -lt 1024 ] && SWAP_TARGET=1024
-          SWAP_NOW=$(awk '/SwapTotal/{printf "%d",$2/1024}' /proc/meminfo)
-          echo "RAM: ${MEM}M | Swap now: ${SWAP_NOW}M | Target: ${SWAP_TARGET}M"
-          if [ "$SWAP_NOW" -ge "$SWAP_TARGET" ]; then
-            echo "Swap sufficient"; swapon --show; exit 0
-          fi
-          swapon --show | grep -q /swapfile && swapoff /swapfile || true
-          rm -f /swapfile
-          echo "Creating ${SWAP_TARGET}M swapfile..."
-          dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_TARGET" status=progress
-          chmod 600 /swapfile
-          mkswap /swapfile && swapon /swapfile
-          free -h
-
       - name: Install build dependencies
         run: |
           pacman -Sy --noconfirm --needed \
@@ -73,13 +48,9 @@ jobs:
             flex bison libelf openssl \
             python-sphinx python-sphinx_rtd_theme wget
 
-      - name: Install LLVM toolchain
+      - name: Install LLVM/Clang toolchain
         run: |
-          wget -q -O llvm.tar.xz "${{ github.event.inputs.llvm_url }}"
-          tar -xf llvm.tar.xz
-          mv clang+llvm-* /opt/llvm
-          echo "/opt/llvm/bin" >> "$GITHUB_PATH"
-          clang --version | head -1
+          pacman -Sy --noconfirm --needed clang lld llvm
 
       - name: Clone CachyOS PKGBUILD repo
         run: |
@@ -100,16 +71,17 @@ jobs:
         if: ${{ github.event.inputs.enable_lto == 'true' }}
         run: |
           cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
-          sed -i 's/_use_llvm_lto=.*/_use_llvm_lto="thin"/' PKGBUILD
+          grep -q '^_use_llvm_lto=' PKGBUILD \
+            && sed -i 's/_use_llvm_lto=.*/_use_llvm_lto="thin"/' PKGBUILD \
+            || echo '_use_llvm_lto="thin"' >> PKGBUILD
 
       - name: Build kernel package
         run: |
           useradd -m builder
-          chown -R builder:builder /opt/llvm "$GITHUB_WORKSPACE"
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
           cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
           su builder -c "
-            export PATH=/opt/llvm/bin:\$PATH
-            export LLVM=/opt/llvm/bin/
             cd \"$GITHUB_WORKSPACE/cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}\"
             makepkg -s --noconfirm --nocheck
           "
