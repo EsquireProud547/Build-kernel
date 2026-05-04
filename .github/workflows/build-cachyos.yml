@@ -1,0 +1,116 @@
+name: Build CachyOS Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_variant:
+        description: Kernel variant
+        required: true
+        type: choice
+        options:
+          - linux-cachyos
+          - linux-cachyos-rc
+          - linux-cachyos-lts
+          - linux-cachyos-hardened
+          - linux-cachyos-server
+          - linux-cachyos-eevdf
+          - linux-cachyos-deckify
+        default: linux-cachyos
+      config_files:
+        description: Config overrides (comma-separated, optional)
+        required: false
+        default: ''
+      llvm_url:
+        description: LLVM prebuilt tar.xz URL
+        required: true
+        default: 'https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.4/clang+llvm-22.1.4-x86_64-linux-gnu-ubuntu-20.04.tar.xz'
+      enable_lto:
+        description: Enable ThinLTO
+        required: false
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Initialize pacman
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Sy --noconfirm --needed git nodejs
+
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
+      - name: Setup swap
+        run: |
+          fallocate -l 8G /swapfile && chmod 600 /swapfile
+          mkswap /swapfile && swapon /swapfile
+
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm --needed \
+            base-devel fakeroot bc cpio xmlto \
+            flex bison libelf openssl \
+            python-sphinx python-sphinx_rtd_theme wget
+
+      - name: Install LLVM toolchain
+        run: |
+          wget -q -O llvm.tar.xz "${{ github.event.inputs.llvm_url }}"
+          tar -xf llvm.tar.xz
+          mv clang+llvm-* /opt/llvm
+          echo "/opt/llvm/bin" >> "$GITHUB_PATH"
+          clang --version | head -1
+
+      - name: Clone CachyOS PKGBUILD repo
+        run: |
+          git clone --depth 1 \
+            https://github.com/CachyOS/linux-cachyos.git cachyos-pkgbuild
+
+      - name: Apply custom config overrides
+        if: ${{ github.event.inputs.config_files != '' }}
+        run: |
+          cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
+          IFS=',' read -ra CFGS <<< "${{ github.event.inputs.config_files }}"
+          for cfg in "${CFGS[@]}"; do
+            [ -f "$GITHUB_WORKSPACE/$cfg" ] \
+              && cat "$GITHUB_WORKSPACE/$cfg" >> config \
+              || echo "Warning: $cfg not found"
+          done
+
+      - name: Configure ThinLTO
+        if: ${{ github.event.inputs.enable_lto == 'true' }}
+        run: |
+          cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
+          sed -i 's/_use_llvm_lto=.*/_use_llvm_lto="thin"/' PKGBUILD
+
+      - name: Build kernel package via makepkg
+        run: |
+          useradd -m builder
+          chown -R builder:builder /opt/llvm "$GITHUB_WORKSPACE"
+          cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
+          su builder -c "
+            export PATH=/opt/llvm/bin:\$PATH
+            export LLVM=/opt/llvm/bin/
+            cd \"$GITHUB_WORKSPACE/cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}\"
+            makepkg -s --noconfirm --nocheck
+          "
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp -v *.pkg.tar.zst "$GITHUB_WORKSPACE/artifacts/" 2>/dev/null || true
+
+      - name: Extract bzImage from package
+        run: |
+          cd "$GITHUB_WORKSPACE/artifacts"
+          PKG=$(ls *.pkg.tar.zst 2>/dev/null | head -1)
+          [ -n "$PKG" ] && tar --zstd -xf "$PKG" -C /tmp/pkg-extract
+          find /tmp/pkg-extract -name bzImage -exec cp -v {} ./ \; 2>/dev/null || true
+          find /tmp/pkg-extract -name System.map -exec cp -v {} ./ \; 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cachyos-${{ github.event.inputs.kernel_variant }}
+          path: artifacts/
