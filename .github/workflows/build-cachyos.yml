@@ -47,8 +47,24 @@ jobs:
 
       - name: Setup swap
         run: |
-          fallocate -l 8G /swapfile && chmod 600 /swapfile
+          MEM=$(awk '/MemTotal/{printf "%d",$2/1024}' /proc/meminfo)
+          DISK=$(df / --output=avail | tail -1)
+          SWAP_TARGET=$(( MEM * 2 - MEM ))
+          SWAP_MAX=$(( DISK / 2 ))
+          [ "$SWAP_TARGET" -gt "$SWAP_MAX" ] && SWAP_TARGET=$SWAP_MAX
+          [ "$SWAP_TARGET" -lt 1024 ] && SWAP_TARGET=1024
+          SWAP_NOW=$(awk '/SwapTotal/{printf "%d",$2/1024}' /proc/meminfo)
+          echo "RAM: ${MEM}M | Swap now: ${SWAP_NOW}M | Target: ${SWAP_TARGET}M"
+          if [ "$SWAP_NOW" -ge "$SWAP_TARGET" ]; then
+            echo "Swap sufficient"; swapon --show; exit 0
+          fi
+          swapon --show | grep -q /swapfile && swapoff /swapfile || true
+          rm -f /swapfile
+          echo "Creating ${SWAP_TARGET}M swapfile..."
+          dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_TARGET" status=progress
+          chmod 600 /swapfile
           mkswap /swapfile && swapon /swapfile
+          free -h
 
       - name: Install build dependencies
         run: |
@@ -67,8 +83,7 @@ jobs:
 
       - name: Clone CachyOS PKGBUILD repo
         run: |
-          git clone --depth 1 \
-            https://github.com/CachyOS/linux-cachyos.git cachyos-pkgbuild
+          git clone --depth 1 https://github.com/CachyOS/linux-cachyos.git cachyos-pkgbuild
 
       - name: Apply custom config overrides
         if: ${{ github.event.inputs.config_files != '' }}
@@ -87,7 +102,7 @@ jobs:
           cd cachyos-pkgbuild/${{ github.event.inputs.kernel_variant }}
           sed -i 's/_use_llvm_lto=.*/_use_llvm_lto="thin"/' PKGBUILD
 
-      - name: Build kernel package via makepkg
+      - name: Build kernel package
         run: |
           useradd -m builder
           chown -R builder:builder /opt/llvm "$GITHUB_WORKSPACE"
@@ -101,7 +116,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           cp -v *.pkg.tar.zst "$GITHUB_WORKSPACE/artifacts/" 2>/dev/null || true
 
-      - name: Extract bzImage from package
+      - name: Extract bzImage
         run: |
           cd "$GITHUB_WORKSPACE/artifacts"
           PKG=$(ls *.pkg.tar.zst 2>/dev/null | head -1)
