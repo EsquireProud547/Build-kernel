@@ -49,8 +49,9 @@ jobs:
           pacman-key --populate archlinux
           pacman -Syu --noconfirm --needed git nodejs
 
+      # v5 uses Node.js 24, avoids deprecation after 2026-06-02
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -73,8 +74,9 @@ jobs:
           set -euxo pipefail
           cd "cachyos-pkgbuild/$KERNEL_VARIANT"
           LTO_VALUE="$([[ "$ENABLE_LTO" == "true" ]] && echo "thin" || echo "none")"
-          if grep -q '^_use_llvm_lto=' PKGBUILD; then
-            sed -i "s/^_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
+          # Use \s* to handle possible leading whitespace in PKGBUILD
+          if grep -q '^\s*_use_llvm_lto=' PKGBUILD; then
+            sed -i "s/^\s*_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
           else
             echo "_use_llvm_lto=\"$LTO_VALUE\"" >> PKGBUILD
           fi
@@ -92,6 +94,7 @@ jobs:
             bash -lc '
               set -e
               cd "$GITHUB_WORKSPACE/cachyos-pkgbuild/$KERNEL_VARIANT"
+              # yes "" handles any remaining prompts despite --noconfirm
               set +o pipefail
               yes "" | makepkg -s --noconfirm --nocheck
               status=${PIPESTATUS[1]}
@@ -114,6 +117,8 @@ jobs:
           PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-*.pkg.tar.zst" \
             ! -name "*-headers-*" -printf '%f\n' | sort | head -n 1)"
           [[ -z "$PKG" ]] && { echo "No package found"; exit 1; }
+          # MUST create target dir before tar -C; tar does not auto-create
+          mkdir -p /tmp/kernel-extract
           tar --zstd -xf "$PKG" -C /tmp/kernel-extract
 
           KVER="$(ls /tmp/kernel-extract/usr/lib/modules/ 2>/dev/null | head -1)"
