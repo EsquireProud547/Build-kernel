@@ -16,7 +16,6 @@ on:
           - linux-cachyos-eevdf
           - linux-cachyos-deckify
         default: linux-cachyos
-
       enable_lto:
         description: Enable ThinLTO
         required: true
@@ -33,14 +32,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     container:
       image: archlinux:latest
-
     defaults:
       run:
         shell: bash
-
     env:
       KERNEL_VARIANT: ${{ github.event.inputs.kernel_variant }}
       ENABLE_LTO: ${{ github.event.inputs.enable_lto }}
@@ -76,13 +72,7 @@ jobs:
         run: |
           set -euxo pipefail
           cd "cachyos-pkgbuild/$KERNEL_VARIANT"
-
-          if [[ "$ENABLE_LTO" == "true" ]]; then
-            LTO_VALUE="thin"
-          else
-            LTO_VALUE="none"
-          fi
-
+          LTO_VALUE="$([[ "$ENABLE_LTO" == "true" ]] && echo "thin" || echo "none")"
           if grep -q '^_use_llvm_lto=' PKGBUILD; then
             sed -i "s/^_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
           else
@@ -92,58 +82,68 @@ jobs:
       - name: Build kernel package
         run: |
           set -euxo pipefail
-
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
           chmod 0440 /etc/sudoers.d/builder
-
           chown -R builder:builder "$GITHUB_WORKSPACE"
-
           runuser -u builder -- env \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             KERNEL_VARIANT="$KERNEL_VARIANT" \
             bash -lc '
               set -e
               cd "$GITHUB_WORKSPACE/cachyos-pkgbuild/$KERNEL_VARIANT"
-
               set +o pipefail
               yes "" | makepkg -s --noconfirm --nocheck
               status=${PIPESTATUS[1]}
               set -o pipefail
-
               exit "$status"
             '
-
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
-
           shopt -s nullglob
           packages=(cachyos-pkgbuild/"$KERNEL_VARIANT"/*.pkg.tar.zst)
-
           if (( ${#packages[@]} == 0 )); then
-            echo "No packages were produced"
-            exit 1
+            echo "No packages were produced"; exit 1
           fi
-
           cp -v "${packages[@]}" "$GITHUB_WORKSPACE/artifacts/"
 
-      - name: Extract kernel files
+      - name: Extract kernel for cross-distro use
         run: |
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/artifacts"
 
-          mkdir -p /tmp/pkg-extract
+          PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-*.pkg.tar.zst" \
+            ! -name "*-headers-*" -printf '%f\n' | sort | head -n 1)"
+          [[ -z "$PKG" ]] && { echo "No package found"; exit 1; }
+          tar --zstd -xf "$PKG" -C /tmp/kernel-extract
 
-          PKG="$(
-            find . -maxdepth 1 -type f \
-              -name "$KERNEL_VARIANT-*.pkg.tar.zst" \
-              ! -name "*-headers-*.pkg.tar.zst" \
-              -printf '%f\n' | sort | head -n 1
-          )"
+          KVER="$(ls /tmp/kernel-extract/usr/lib/modules/ 2>/dev/null | head -1)"
+          echo "Kernel release: $KVER"
 
-          if [[ -n "$PKG" ]] && tar --zstd -xf "$PKG" -C /tmp/pkg-extract; then
-            find /tmp/pkg-extract -type f -path "*/boot/vmlinuz*" -exec cp -v {} ./ \; || true
-            find /tmp/pkg-extract -type f -name "System.map*" -exec cp -v {} ./ \; || true
-            find /tmp/pkg-extract -type f -name "config*" -exec cp -v {} ./ \; || true
+          find /tmp/kernel-extract -type f -path "*/boot/vmlinuz*" -exec cp -v {} ./ \; || true
+          find /tmp/kernel-extract -type f -name "System.map*" -exec cp -v {} ./ \; || true
+          find /tmp/kernel-extract -type f -name "config*" -exec cp -v {} ./ \; || true
+
+          if [[ -n "$KVER" ]]; then
+            mkdir -p "modules/$KVER"
+            cp -a "/tmp/kernel-extract/usr/lib/modules/$KVER/"* "modules/$KVER/" 2>/dev/null || true
+          fi
+
+          HDR_PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-headers-*.pkg.tar.zst" \
+            -printf '%f\n' | head -n 1)"
+          if [[ -n "$HDR_PKG" ]]; then
+            mkdir -p /tmp/headers-extract
+            tar --zstd -xf "$HDR_PKG" -C /tmp/headers-extract
+            cp -a /tmp/headers-extract/usr modules/ 2>/dev/null || true
+          fi
+
+          if [[ -n "$KVER" ]]; then
+            mkdir -p "cachyos-full/$KVER"
+            mv -v vmlinuz-* "cachyos-full/$KVER/vmlinuz" 2>/dev/null || true
+            mv -v System.map-* "cachyos-full/$KVER/" 2>/dev/null || true
+            mv -v config-* "cachyos-full/$KVER/" 2>/dev/null || true
+            mv -v modules "cachyos-full/$KVER/" 2>/dev/null || true
+            tar --zstd -chf "cachyos-kernel-$KVER.tar.zst" "cachyos-full/"
+            rm -rf "cachyos-full"
           fi
 
           ls -lah
