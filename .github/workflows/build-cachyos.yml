@@ -35,6 +35,14 @@ on:
           - 'true'
           - 'false'
         default: 'false'
+      use_bbr3:
+        description: Set BBR3 as default TCP congestion control algorithm
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'false'
 
 permissions:
   contents: read
@@ -52,6 +60,7 @@ jobs:
       KERNEL_VARIANT: ${{ github.event.inputs.kernel_variant }}
       ENABLE_LTO: ${{ github.event.inputs.enable_lto }}
       ENABLE_O3: ${{ github.event.inputs.enable_o3 }}
+      USE_BBR3: ${{ github.event.inputs.use_bbr3 }}
 
     steps:
       - name: Initialize pacman
@@ -103,6 +112,33 @@ jobs:
             else
               echo '_kernel_cflags="-O3"' >> PKGBUILD
             fi
+          fi
+
+      - name: Configure default TCP congestion control
+        run: |
+          set -euxo pipefail
+          if [[ "$USE_BBR3" == "true" ]]; then
+            cd "cachyos-pkgbuild/$KERNEL_VARIANT"
+
+            # Step 1: Ensure BBR3 is built-in (not a module)
+            if grep -q '^CONFIG_TCP_CONG_BBR3=' config; then
+              sed -i 's/^CONFIG_TCP_CONG_BBR3=.*/CONFIG_TCP_CONG_BBR3=y/' config
+            else
+              echo 'CONFIG_TCP_CONG_BBR3=y' >> config
+            fi
+
+            # Step 2: Set BBR3 as the default TCP congestion control algorithm
+            if grep -q '^CONFIG_DEFAULT_TCP_CONG=' config; then
+              sed -i 's/^CONFIG_DEFAULT_TCP_CONG=.*/CONFIG_DEFAULT_TCP_CONG="bbr3"/' config
+            else
+              {
+                echo 'CONFIG_DEFAULT_TCP_CONG="bbr3"'
+                echo 'CONFIG_DEFAULT_CUBIC is not set'
+              } >> config
+            fi
+
+            # Step 3: Verify the changes
+            grep -E '^CONFIG_TCP_CONG_BBR3=|^CONFIG_DEFAULT_TCP_CONG=' config
           fi
 
       - name: Build kernel package
