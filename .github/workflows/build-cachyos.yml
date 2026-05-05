@@ -9,11 +9,14 @@ on:
         type: choice
         options:
           - linux-cachyos
+          - linux-cachyos-bmq
+          - linux-cachyos-bore
           - linux-cachyos-rc
           - linux-cachyos-lts
           - linux-cachyos-hardened
           - linux-cachyos-server
           - linux-cachyos-eevdf
+          - linux-cachyos-rt-bore
           - linux-cachyos-deckify
         default: linux-cachyos
       enable_lto:
@@ -24,6 +27,14 @@ on:
           - 'true'
           - 'false'
         default: 'true'
+      enable_o3:
+        description: Enable -O3 optimization (default kernel uses -O2)
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'false'
 
 permissions:
   contents: read
@@ -40,6 +51,7 @@ jobs:
     env:
       KERNEL_VARIANT: ${{ github.event.inputs.kernel_variant }}
       ENABLE_LTO: ${{ github.event.inputs.enable_lto }}
+      ENABLE_O3: ${{ github.event.inputs.enable_o3 }}
 
     steps:
       - name: Initialize pacman
@@ -79,6 +91,18 @@ jobs:
             sed -i "s/^\s*_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
           else
             echo "_use_llvm_lto=\"$LTO_VALUE\"" >> PKGBUILD
+          fi
+
+      - name: Configure optimization level
+        run: |
+          set -euxo pipefail
+          cd "cachyos-pkgbuild/$KERNEL_VARIANT"
+          if [[ "$ENABLE_O3" == "true" ]]; then
+            if grep -q '^\s*_kernel_cflags=' PKGBUILD; then
+              sed -i 's/^\s*_kernel_cflags=.*/_kernel_cflags="-O3"/' PKGBUILD
+            else
+              echo '_kernel_cflags="-O3"' >> PKGBUILD
+            fi
           fi
 
       - name: Build kernel package
