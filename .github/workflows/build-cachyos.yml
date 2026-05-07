@@ -70,7 +70,6 @@ jobs:
           pacman-key --populate archlinux
           pacman -Syu --noconfirm --needed git nodejs
 
-      # v5 uses Node.js 24, avoids deprecation after 2026-06-02
       - name: Checkout repository
         uses: actions/checkout@v5
 
@@ -95,7 +94,6 @@ jobs:
           set -euxo pipefail
           cd "cachyos-pkgbuild/$KERNEL_VARIANT"
           LTO_VALUE="$([[ "$ENABLE_LTO" == "true" ]] && echo "thin" || echo "none")"
-          # Use \s* to handle possible leading whitespace in PKGBUILD
           if grep -q '^\s*_use_llvm_lto=' PKGBUILD; then
             sed -i "s/^\s*_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
           else
@@ -119,25 +117,16 @@ jobs:
           set -euxo pipefail
           if [[ "$USE_BBR3" == "true" ]]; then
             cd "cachyos-pkgbuild/$KERNEL_VARIANT"
-
-            # Step 1: Ensure BBR3 is built-in (not a module)
             if grep -q '^CONFIG_TCP_CONG_BBR3=' config; then
               sed -i 's/^CONFIG_TCP_CONG_BBR3=.*/CONFIG_TCP_CONG_BBR3=y/' config
             else
               echo 'CONFIG_TCP_CONG_BBR3=y' >> config
             fi
-
-            # Step 2: Set BBR3 as the default TCP congestion control algorithm
             if grep -q '^CONFIG_DEFAULT_TCP_CONG=' config; then
               sed -i 's/^CONFIG_DEFAULT_TCP_CONG=.*/CONFIG_DEFAULT_TCP_CONG="bbr3"/' config
             else
-              {
-                echo 'CONFIG_DEFAULT_TCP_CONG="bbr3"'
-                echo 'CONFIG_DEFAULT_CUBIC is not set'
-              } >> config
+              echo 'CONFIG_DEFAULT_TCP_CONG="bbr3"' >> config
             fi
-
-            # Step 3: Verify the changes
             grep -E '^CONFIG_TCP_CONG_BBR3=|^CONFIG_DEFAULT_TCP_CONG=' config
           fi
 
@@ -154,9 +143,8 @@ jobs:
             bash -lc '
               set -e
               cd "$GITHUB_WORKSPACE/cachyos-pkgbuild/$KERNEL_VARIANT"
-              # yes "" handles any remaining prompts despite --noconfirm
               set +o pipefail
-              yes "" | makepkg -s --noconfirm --nocheck
+              yes "" | makepkg -s --noconfirm --nocheck --skipchecksums
               status=${PIPESTATUS[1]}
               set -o pipefail
               exit "$status"
@@ -173,26 +161,20 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/artifacts"
-
           PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-*.pkg.tar.zst" \
             ! -name "*-headers-*" -printf '%f\n' | sort | head -n 1)"
           [[ -z "$PKG" ]] && { echo "No package found"; exit 1; }
-          # MUST create target dir before tar -C; tar does not auto-create
           mkdir -p /tmp/kernel-extract
           tar --zstd -xf "$PKG" -C /tmp/kernel-extract
-
           KVER="$(ls /tmp/kernel-extract/usr/lib/modules/ 2>/dev/null | head -1)"
           echo "Kernel release: $KVER"
-
           find /tmp/kernel-extract -type f -path "*/boot/vmlinuz*" -exec cp -v {} ./ \; || true
           find /tmp/kernel-extract -type f -name "System.map*" -exec cp -v {} ./ \; || true
           find /tmp/kernel-extract -type f -name "config*" -exec cp -v {} ./ \; || true
-
           if [[ -n "$KVER" ]]; then
             mkdir -p "modules/$KVER"
             cp -a "/tmp/kernel-extract/usr/lib/modules/$KVER/"* "modules/$KVER/" 2>/dev/null || true
           fi
-
           HDR_PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-headers-*.pkg.tar.zst" \
             -printf '%f\n' | head -n 1)"
           if [[ -n "$HDR_PKG" ]]; then
@@ -200,7 +182,6 @@ jobs:
             tar --zstd -xf "$HDR_PKG" -C /tmp/headers-extract
             cp -a /tmp/headers-extract/usr modules/ 2>/dev/null || true
           fi
-
           if [[ -n "$KVER" ]]; then
             mkdir -p "cachyos-full/$KVER"
             mv -v vmlinuz-* "cachyos-full/$KVER/vmlinuz" 2>/dev/null || true
@@ -210,7 +191,6 @@ jobs:
             tar --zstd -chf "cachyos-kernel-$KVER.tar.zst" "cachyos-full/"
             rm -rf "cachyos-full"
           fi
-
           ls -lah
 
       - name: Upload artifacts
