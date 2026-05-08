@@ -28,7 +28,7 @@ on:
           - 'false'
         default: 'true'
       enable_o3:
-        description: Enable -O3 optimization (default kernel uses -O2)
+        description: Enable -O3 optimization
         required: true
         type: choice
         options:
@@ -36,7 +36,7 @@ on:
           - 'false'
         default: 'false'
       use_bbr3:
-        description: Set BBR3 as default TCP congestion control algorithm
+        description: Enable BBRv3 as default TCP congestion control
         required: true
         type: choice
         options:
@@ -46,6 +46,12 @@ on:
 
 permissions:
   contents: read
+
+env:
+  PKGBASE_SUFFIX: '-custom'
+  _use_llvm_lto: ${{ github.event.inputs.enable_lto == 'true' && 'thin' || 'none' }}
+  _kernel_cflags: ${{ github.event.inputs.enable_o3 == 'true' && '-O3' || '' }}
+  _tcp_bbr3: ${{ github.event.inputs.use_bbr3 == 'true' && 'yes' || 'no' }}
 
 jobs:
   build:
@@ -58,9 +64,6 @@ jobs:
         shell: bash
     env:
       KERNEL_VARIANT: ${{ github.event.inputs.kernel_variant }}
-      ENABLE_LTO: ${{ github.event.inputs.enable_lto }}
-      ENABLE_O3: ${{ github.event.inputs.enable_o3 }}
-      USE_BBR3: ${{ github.event.inputs.use_bbr3 }}
 
     steps:
       - name: Initialize pacman
@@ -89,46 +92,12 @@ jobs:
           test -f "cachyos-pkgbuild/$KERNEL_VARIANT/PKGBUILD"
           test -f "cachyos-pkgbuild/$KERNEL_VARIANT/config"
 
-      - name: Configure LTO
+      - name: Customize package name to avoid conflicts
         run: |
           set -euxo pipefail
           cd "cachyos-pkgbuild/$KERNEL_VARIANT"
-          LTO_VALUE="$([[ "$ENABLE_LTO" == "true" ]] && echo "thin" || echo "none")"
-          if grep -q '^\s*_use_llvm_lto=' PKGBUILD; then
-            sed -i "s/^\s*_use_llvm_lto=.*/_use_llvm_lto=\"$LTO_VALUE\"/" PKGBUILD
-          else
-            echo "_use_llvm_lto=\"$LTO_VALUE\"" >> PKGBUILD
-          fi
-
-      - name: Configure optimization level
-        run: |
-          set -euxo pipefail
-          cd "cachyos-pkgbuild/$KERNEL_VARIANT"
-          if [[ "$ENABLE_O3" == "true" ]]; then
-            if grep -q '^\s*_kernel_cflags=' PKGBUILD; then
-              sed -i 's/^\s*_kernel_cflags=.*/_kernel_cflags="-O3"/' PKGBUILD
-            else
-              echo '_kernel_cflags="-O3"' >> PKGBUILD
-            fi
-          fi
-
-      - name: Configure default TCP congestion control
-        run: |
-          set -euxo pipefail
-          if [[ "$USE_BBR3" == "true" ]]; then
-            cd "cachyos-pkgbuild/$KERNEL_VARIANT"
-            if grep -q '^CONFIG_TCP_CONG_BBR3=' config; then
-              sed -i 's/^CONFIG_TCP_CONG_BBR3=.*/CONFIG_TCP_CONG_BBR3=y/' config
-            else
-              echo 'CONFIG_TCP_CONG_BBR3=y' >> config
-            fi
-            if grep -q '^CONFIG_DEFAULT_TCP_CONG=' config; then
-              sed -i 's/^CONFIG_DEFAULT_TCP_CONG=.*/CONFIG_DEFAULT_TCP_CONG="bbr3"/' config
-            else
-              echo 'CONFIG_DEFAULT_TCP_CONG="bbr3"' >> config
-            fi
-            grep -E '^CONFIG_TCP_CONG_BBR3=|^CONFIG_DEFAULT_TCP_CONG=' config
-          fi
+          sed -i "s/^pkgbase=.*/&${PKGBASE_SUFFIX}/" PKGBUILD
+          grep '^pkgbase=' PKGBUILD
 
       - name: Build kernel package
         run: |
@@ -140,6 +109,9 @@ jobs:
           runuser -u builder -- env \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             KERNEL_VARIANT="$KERNEL_VARIANT" \
+            _use_llvm_lto="$_use_llvm_lto" \
+            _kernel_cflags="$_kernel_cflags" \
+            _tcp_bbr3="$_tcp_bbr3" \
             bash -lc '
               set -e
               cd "$GITHUB_WORKSPACE/cachyos-pkgbuild/$KERNEL_VARIANT"
@@ -161,7 +133,8 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/artifacts"
-          PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-*.pkg.tar.zst" \
+          PKG_BASE="${KERNEL_VARIANT}${PKGBASE_SUFFIX}"
+          PKG="$(find . -maxdepth 1 -type f -name "${PKG_BASE}-*.pkg.tar.zst" \
             ! -name "*-headers-*" -printf '%f\n' | sort | head -n 1)"
           [[ -z "$PKG" ]] && { echo "No package found"; exit 1; }
           mkdir -p /tmp/kernel-extract
@@ -175,7 +148,7 @@ jobs:
             mkdir -p "modules/$KVER"
             cp -a "/tmp/kernel-extract/usr/lib/modules/$KVER/"* "modules/$KVER/" 2>/dev/null || true
           fi
-          HDR_PKG="$(find . -maxdepth 1 -type f -name "$KERNEL_VARIANT-headers-*.pkg.tar.zst" \
+          HDR_PKG="$(find . -maxdepth 1 -type f -name "${PKG_BASE}-headers-*.pkg.tar.zst" \
             -printf '%f\n' | head -n 1)"
           if [[ -n "$HDR_PKG" ]]; then
             mkdir -p /tmp/headers-extract
@@ -196,7 +169,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cachyos-${{ github.event.inputs.kernel_variant }}
+          name: cachyos-${{ env.KERNEL_VARIANT }}${{ env.PKGBASE_SUFFIX }}
           path: artifacts/
           if-no-files-found: error
           compression-level: 0
