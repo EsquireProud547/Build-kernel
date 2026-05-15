@@ -23,25 +23,19 @@ on:
         description: Enable ThinLTO
         required: true
         type: choice
-        options:
-          - 'true'
-          - 'false'
+        options: ['true', 'false']
         default: 'true'
       enable_o3:
         description: Enable -O3 optimization
         required: true
         type: choice
-        options:
-          - 'true'
-          - 'false'
+        options: ['true', 'false']
         default: 'false'
       use_bbr3:
         description: Enable BBRv3 as default TCP congestion control
         required: true
         type: choice
-        options:
-          - 'true'
-          - 'false'
+        options: ['true', 'false']
         default: 'false'
 
 permissions:
@@ -80,7 +74,7 @@ jobs:
         run: |
           set -euxo pipefail
           pacman -S --noconfirm --needed \
-            base-devel fakeroot sudo \
+            base-devel fakeroot sudo kmod \
             bc cpio xmlto flex bison libelf openssl \
             python-sphinx python-sphinx_rtd_theme \
             clang lld llvm wget zstd
@@ -92,20 +86,21 @@ jobs:
           test -f "cachyos-pkgbuild/$KERNEL_VARIANT/PKGBUILD"
           test -f "cachyos-pkgbuild/$KERNEL_VARIANT/config"
 
-      - name: Customize package name to avoid conflicts
+      - name: Customize package name
         run: |
           set -euxo pipefail
           cd "cachyos-pkgbuild/$KERNEL_VARIANT"
           sed -i "s/^pkgbase=.*/&${PKGBASE_SUFFIX}/" PKGBUILD
           grep '^pkgbase=' PKGBUILD
 
-      - name: Build kernel package
+      - name: Build kernel packages
         run: |
           set -euxo pipefail
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
           chmod 0440 /etc/sudoers.d/builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
+
           runuser -u builder -- env \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             KERNEL_VARIANT="$KERNEL_VARIANT" \
@@ -121,49 +116,50 @@ jobs:
               set -o pipefail
               exit "$status"
             '
-          mkdir -p "$GITHUB_WORKSPACE/artifacts"
-          shopt -s nullglob
-          packages=(cachyos-pkgbuild/"$KERNEL_VARIANT"/*.pkg.tar.zst)
-          if (( ${#packages[@]} == 0 )); then
-            echo "No packages were produced"; exit 1
-          fi
-          cp -v "${packages[@]}" "$GITHUB_WORKSPACE/artifacts/"
 
-      - name: Extract kernel for cross-distro use
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp -v cachyos-pkgbuild/"$KERNEL_VARIANT"/*.pkg.tar.zst "$GITHUB_WORKSPACE/artifacts/"
+
+      - name: Create cross-distro archives
         run: |
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/artifacts"
+
           PKG_BASE="${KERNEL_VARIANT}${PKGBASE_SUFFIX}"
-          PKG="$(find . -maxdepth 1 -type f -name "${PKG_BASE}-*.pkg.tar.zst" \
-            ! -name "*-headers-*" -printf '%f\n' | sort | head -n 1)"
-          [[ -z "$PKG" ]] && { echo "No package found"; exit 1; }
+
+          KERNEL_PKG="$(find . -maxdepth 1 -type f -name "${PKG_BASE}-*.pkg.tar.zst" ! -name "*-headers-*" -printf '%f\n' | sort | head -n 1)"
+          [[ -z "$KERNEL_PKG" ]] && { echo "No kernel package found"; exit 1; }
+
           mkdir -p /tmp/kernel-extract
-          tar --zstd -xf "$PKG" -C /tmp/kernel-extract
-          KVER="$(ls /tmp/kernel-extract/usr/lib/modules/ 2>/dev/null | head -1)"
+          tar --zstd -xf "$KERNEL_PKG" -C /tmp/kernel-extract
+
+          KVER="$(find /tmp/kernel-extract/usr/lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -n 1)"
+          [[ -z "$KVER" ]] && { echo "No kernel modules found"; exit 1; }
+
           echo "Kernel release: $KVER"
-          find /tmp/kernel-extract -type f -path "*/boot/vmlinuz*" -exec cp -v {} ./ \; || true
-          find /tmp/kernel-extract -type f -name "System.map*" -exec cp -v {} ./ \; || true
-          find /tmp/kernel-extract -type f -name "config*" -exec cp -v {} ./ \; || true
-          if [[ -n "$KVER" ]]; then
-            mkdir -p "modules/$KVER"
-            cp -a "/tmp/kernel-extract/usr/lib/modules/$KVER/"* "modules/$KVER/" 2>/dev/null || true
+
+          OUT="cachyos-kernel-$KVER"
+          mkdir -p "$OUT/modules/$KVER"
+
+          find /tmp/kernel-extract -type f -path "*/boot/vmlinuz*" -exec cp -v {} "$OUT/vmlinuz" \; -quit
+          find /tmp/kernel-extract -type f -name "System.map*" -exec cp -v {} "$OUT/" \; -quit
+          find /tmp/kernel-extract -type f -name "config*" -exec cp -v {} "$OUT/" \; -quit
+
+          cp -a "/tmp/kernel-extract/usr/lib/modules/$KVER/"* "$OUT/modules/$KVER/"
+
+          depmod -b "$PWD/$OUT" "$KVER"
+
+          tar --zstd -chf "$OUT.tar.zst" "$OUT"
+          rm -rf "$OUT"
+
+          HEADERS_PKG="$(find . -maxdepth 1 -type f -name "${PKG_BASE}-headers-*.pkg.tar.zst" -printf '%f\n' | sort | head -n 1)"
+          if [[ -n "$HEADERS_PKG" ]]; then
+            mkdir -p "cachyos-headers-$KVER"
+            tar --zstd -xf "$HEADERS_PKG" -C "cachyos-headers-$KVER"
+            tar --zstd -chf "cachyos-headers-$KVER.tar.zst" "cachyos-headers-$KVER"
+            rm -rf "cachyos-headers-$KVER"
           fi
-          HDR_PKG="$(find . -maxdepth 1 -type f -name "${PKG_BASE}-headers-*.pkg.tar.zst" \
-            -printf '%f\n' | head -n 1)"
-          if [[ -n "$HDR_PKG" ]]; then
-            mkdir -p /tmp/headers-extract
-            tar --zstd -xf "$HDR_PKG" -C /tmp/headers-extract
-            cp -a /tmp/headers-extract/usr modules/ 2>/dev/null || true
-          fi
-          if [[ -n "$KVER" ]]; then
-            mkdir -p "cachyos-full/$KVER"
-            mv -v vmlinuz-* "cachyos-full/$KVER/vmlinuz" 2>/dev/null || true
-            mv -v System.map-* "cachyos-full/$KVER/" 2>/dev/null || true
-            mv -v config-* "cachyos-full/$KVER/" 2>/dev/null || true
-            mv -v modules "cachyos-full/$KVER/" 2>/dev/null || true
-            tar --zstd -chf "cachyos-kernel-$KVER.tar.zst" "cachyos-full/"
-            rm -rf "cachyos-full"
-          fi
+
           ls -lah
 
       - name: Upload artifacts
