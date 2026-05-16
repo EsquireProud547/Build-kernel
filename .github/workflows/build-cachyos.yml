@@ -133,10 +133,31 @@ jobs:
 
           cd "cachyos-pkgbuild/$KERNEL_VARIANT"
 
-          sed -i "s/^pkgbase=.*/&${PKGBASE_SUFFIX}/" PKGBUILD
+          # Original PKGBUILD usually contains something like:
+          #   pkgbase="linux-$_pkgsuffix"
+          #
+          # Write it back as:
+          #   pkgbase="linux-${_pkgsuffix}-custom"
+          #
+          # Do not validate by grepping the raw PKGBUILD line, because the file
+          # intentionally contains shell variables. Validate the evaluated value instead.
+          sed -i "s|^pkgbase=.*|pkgbase=\"linux-\${_pkgsuffix}${PKGBASE_SUFFIX}\"|" PKGBUILD
 
           grep '^pkgbase=' PKGBUILD
-          test "$(grep -c "^pkgbase=${KERNEL_VARIANT}${PKGBASE_SUFFIX}$" PKGBUILD)" -eq 1
+
+          EXPECTED_PKGBASE="${KERNEL_VARIANT}${PKGBASE_SUFFIX}"
+
+          ACTUAL_PKGBASE="$(
+            bash -c '
+              source ./PKGBUILD
+              printf "%s\n" "$pkgbase"
+            '
+          )"
+
+          echo "Expected pkgbase: $EXPECTED_PKGBASE"
+          echo "Actual pkgbase:   $ACTUAL_PKGBASE"
+
+          test "$ACTUAL_PKGBASE" = "$EXPECTED_PKGBASE"
 
       - name: Build kernel packages
         run: |
@@ -198,6 +219,8 @@ jobs:
             exit 1
           fi
 
+          echo "Kernel package: $KERNEL_PKG"
+
           rm -rf /tmp/kernel-extract
           mkdir -p /tmp/kernel-extract
 
@@ -233,6 +256,10 @@ jobs:
           mkdir -p "$OUT/boot"
           mkdir -p "$OUT/lib/modules/$KVER"
 
+          # Arch/CachyOS kernel packages commonly place vmlinuz here:
+          #   /usr/lib/modules/$KVER/vmlinuz
+          #
+          # Some packages may still place it under /boot, so keep a fallback.
           if [[ -f "$MODSRC/vmlinuz" ]]; then
             install -Dm644 "$MODSRC/vmlinuz" "$OUT/boot/vmlinuz-$KVER"
           else
@@ -263,6 +290,8 @@ jobs:
               -quit
           fi
 
+          # Copy modules into the standard depmod rootfs location:
+          #   $OUT/lib/modules/$KVER
           cp -a "$MODSRC"/. "$OUT/lib/modules/$KVER/"
 
           depmod -b "$PWD/$OUT" "$KVER"
@@ -289,6 +318,8 @@ jobs:
           )"
 
           if [[ -n "$HEADERS_PKG" ]]; then
+            echo "Headers package: $HEADERS_PKG"
+
             HDR_OUT="cachyos-headers-$KVER-rootfs"
 
             rm -rf "$HDR_OUT"
@@ -319,29 +350,34 @@ jobs:
 
           PKG_BASE="${KERNEL_VARIANT}${PKGBASE_SUFFIX}"
 
-          test -n "$(
+          KERNEL_PKG="$(
             find . -maxdepth 1 -type f \
               -name "${PKG_BASE}-*.pkg.tar.zst" \
               ! -name "*-headers-*" \
               ! -name "*-debug-*" \
               ! -name "*-dbg-*" \
               -printf '%f\n' \
+              | sort -V \
               | head -n 1
           )"
 
-          test -n "$(
+          if [[ -z "$KERNEL_PKG" ]]; then
+            echo "Missing pacman kernel package"
+            exit 1
+          fi
+
+          HEADERS_PKG="$(
             find . -maxdepth 1 -type f \
               -name "${PKG_BASE}-headers-*.pkg.tar.zst" \
               -printf '%f\n' \
+              | sort -V \
               | head -n 1
           )"
 
-          test -n "$(
-            find . -maxdepth 1 -type f \
-              -name "cachyos-kernel-*-rootfs.tar.zst" \
-              -printf '%f\n' \
-              | head -n 1
-          )"
+          if [[ -z "$HEADERS_PKG" ]]; then
+            echo "Missing pacman headers package"
+            exit 1
+          fi
 
           KERNEL_ROOTFS_TAR="$(
             find . -maxdepth 1 -type f \
@@ -350,6 +386,11 @@ jobs:
               | sort -V \
               | head -n 1
           )"
+
+          if [[ -z "$KERNEL_ROOTFS_TAR" ]]; then
+            echo "Missing cross-distro kernel rootfs archive"
+            exit 1
+          fi
 
           rm -rf /tmp/kernel-rootfs-check
           mkdir -p /tmp/kernel-rootfs-check
@@ -370,6 +411,7 @@ jobs:
           )"
 
           test -n "$KVER"
+
           test -f "/tmp/kernel-rootfs-check/boot/vmlinuz-$KVER"
           test -d "/tmp/kernel-rootfs-check/lib/modules/$KVER/kernel"
           test -f "/tmp/kernel-rootfs-check/lib/modules/$KVER/modules.dep"
@@ -379,22 +421,25 @@ jobs:
           test -f "/tmp/kernel-rootfs-check/lib/modules/$KVER/modules.builtin.modinfo"
           test -f "/tmp/kernel-rootfs-check/lib/modules/$KVER/modules.order"
 
-          if find . -maxdepth 1 -type f -name "cachyos-headers-*-rootfs.tar.zst" | grep -q .; then
-            HEADERS_ROOTFS_TAR="$(
-              find . -maxdepth 1 -type f \
-                -name "cachyos-headers-*-rootfs.tar.zst" \
-                -printf '%f\n' \
-                | sort -V \
-                | head -n 1
-            )"
+          HEADERS_ROOTFS_TAR="$(
+            find . -maxdepth 1 -type f \
+              -name "cachyos-headers-*-rootfs.tar.zst" \
+              -printf '%f\n' \
+              | sort -V \
+              | head -n 1
+          )"
 
-            rm -rf /tmp/headers-rootfs-check
-            mkdir -p /tmp/headers-rootfs-check
-
-            tar --zstd -xf "$HEADERS_ROOTFS_TAR" -C /tmp/headers-rootfs-check
-
-            test -d /tmp/headers-rootfs-check/usr
+          if [[ -z "$HEADERS_ROOTFS_TAR" ]]; then
+            echo "Missing cross-distro headers rootfs archive"
+            exit 1
           fi
+
+          rm -rf /tmp/headers-rootfs-check
+          mkdir -p /tmp/headers-rootfs-check
+
+          tar --zstd -xf "$HEADERS_ROOTFS_TAR" -C /tmp/headers-rootfs-check
+
+          test -d /tmp/headers-rootfs-check/usr
 
           echo "Artifact validation passed"
 
