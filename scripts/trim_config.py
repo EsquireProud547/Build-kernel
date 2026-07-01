@@ -122,13 +122,6 @@ DISABLE_RULES = uniq_rules([
         "KUNIT", "LKDTM", "FAULT_INJECTION", "NOTIFIER_ERROR_INJECTION", "X86_DECODER_SELFTEST",
         "PROVE_LOCKING", "LOCK_STAT", "LATENCYTOP", "PM_DEBUG", "WQ_WATCHDOG",
     ]),
-    # DEBUG_INFO 子选项（互斥模式，需逐个处理，不能用 ns 一锅端）
-    *rules("debug", "exact", [
-        "DEBUG_INFO_NONE",             # "不调试"与 DEBUG_INFO=y 矛盾
-        "DEBUG_INFO_TOOLCHAIN_DEFAULT",# 让编译器决定 DWARF 版本，不可控
-        "DEBUG_INFO_DWARF4",           # 保留 REDUCED + BTF 即可，无需完整 DWARF
-        "DEBUG_INFO_DWARF5",           # 同上
-    ]),
     *rules("debug", "prefix", ["TEST_"]),
     *rules("trace", "ns", [
         "FTRACE", "FUNCTION_TRACER", "FUNCTION_GRAPH_TRACER", "HIST_TRIGGERS", "KPROBES",
