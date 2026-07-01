@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """内核 .config 精简脚本 — 针对 AMD R5 4650GE + RTL8822CE + Realtek 网卡。
 用法: python3 trim_config.py <输入> <输出>
-只将 CONFIG_FOO=y/m 改为 "# CONFIG_FOO is not set"，不动非布尔值和保护列表。"""
+只将 CONFIG_FOO=y/m 改为 "# CONFIG_FOO is not set"，不动非布尔值和保护列表。
+"""
 
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ def uniq_rules(items: Iterable[Rule]) -> list[Rule]:
 
 
 # ============================================================
-# 保护列表：启动/运行时必需 + 本机硬件
+# 保护列表：启动/运行时必需 + 本机硬件（精简版）
 # ============================================================
 
 KEEP_EXACT = {
@@ -59,13 +60,13 @@ KEEP_EXACT = {
     "MODULES", "MODULE_UNLOAD",
     "BINFMT_ELF", "BINFMT_SCRIPT",
     "DEVTMPFS", "PROC_FS", "SYSFS", "TMPFS",
-    "CGROUPS", "NAMESPACES", "SECCOMP", "BPF", "BPF_SYSCALL",
+    "CGROUPS", "NAMESPACES", "SECCOMP", "BPF",
 
     # 固件/平台/PCI/ACPI
     "PCI", "PCI_MSI", "PCI_QUIRKS", "PCIEPORTBUS",
-    "ACPI", "DMI", "EFI", "EFI_PARTITION", "EFIVAR_FS",
+    "ACPI", "DMI", "EFI", "EFI_PARTITION",
     "MICROCODE", "CPU_SUP_AMD", "X86_MCE", "X86_MCE_AMD",
-    "AMD_NB", "AMD_IOMMU", "X86_AMD_PLATFORM_DEVICE",
+    "AMD_NB",
 
     # 存储 + 根文件系统
     "BLOCK", "BLK_DEV", "BLK_DEV_SD",
@@ -96,9 +97,6 @@ KEEP_EXACT = {
     "USB_HID", "USB_STORAGE",
     "HID", "HID_GENERIC",
     "INPUT", "INPUT_EVDEV",
-    "SERIO", "SERIO_I8042", "SERIO_LIBPS2",
-    "KEYBOARD_ATKBD", "MOUSE_PS2",
-    "I2C", "I2C_CHARDEV",
 }
 
 KEEP_NS = {
@@ -109,30 +107,29 @@ KEEP_NS = {
 
 
 # ============================================================
-# 禁用列表：AMD 桌面精简配置
+# 禁用列表：AMD 桌面精简配置（精简版）
 # ============================================================
 
 DISABLE_RULES = uniq_rules([
-    # 调试/测试/追踪
+    # 调试/测试/追踪（保留核心禁用）
     *rules("debug", "ns", [
-        "GDB_SCRIPTS", "GCOV", "KASAN", "KMSAN", "KCSAN", "UBSAN", "KCOV",
-        "KUNIT", "LKDTM", "FAULT_INJECTION", "NOTIFIER_ERROR_INJECTION", "X86_DECODER_SELFTEST",
-        "PROVE_LOCKING", "LOCK_STAT", "LATENCYTOP", "PM_DEBUG", "WQ_WATCHDOG",
+        "KASAN", "KMSAN", "KCSAN", "UBSAN", "KCOV",
+        "KUNIT", "LKDTM", "FAULT_INJECTION",
+        "PROVE_LOCKING", "LOCK_STAT", "LATENCYTOP",
     ]),
     *rules("debug", "prefix", ["TEST_"]),
     *rules("trace", "ns", [
-        "FTRACE", "FUNCTION_TRACER", "FUNCTION_GRAPH_TRACER", "HIST_TRIGGERS", "KPROBES",
-        "KRETPROBES", "UPROBES", "TRACEPOINTS", "TRACING", "DYNAMIC_DEBUG",
-        "SCHEDSTATS", "BLK_DEV_IO_TRACE", "FTRACE_SYSCALLS",
+        "FTRACE", "FUNCTION_TRACER", "FUNCTION_GRAPH_TRACER",
+        "KPROBES", "KRETPROBES", "UPROBES", "TRACEPOINTS", "TRACING",
+        "DYNAMIC_DEBUG", "SCHEDSTATS", "BLK_DEV_IO_TRACE",
     ]),
 
     # 非目标 GPU（Intel/NVIDIA/VMware/QEMU/老旧显卡）
     *rules("gpu", "ns", [
         "DRM_I915", "DRM_XE", "DRM_NOUVEAU", "DRM_RADEON", "DRM_VMWGFX", "DRM_VBOXVIDEO",
         "DRM_QXL", "DRM_BOCHS", "DRM_CIRRUS_QEMU", "DRM_GMA500", "DRM_AST", "DRM_MGAG200",
-        "DRM_UDL", "DRM_VIRTIO_GPU", "DRM_HYPERV", "DRM_XEN", "FB_NVIDIA", "FB_RIVA",
-        "FB_RADEON", "FB_I740", "FB_SIS", "FB_VIA", "FB_VIRTUAL", "DRM_PANEL", "DRM_BRIDGE",
-        "DRM_TINYDRM", "DRM_SSD130X",
+        "DRM_UDL", "DRM_VIRTIO_GPU", "DRM_HYPERV", "DRM_XEN",
+        "FB_NVIDIA", "FB_RIVA", "FB_RADEON", "FB_I740", "FB_SIS", "FB_VIA", "FB_VIRTUAL",
     ]),
     *rules("gpu", "exact", [
         "DRM_AMDGPU_SI", "DRM_AMDGPU_CIK", "DRM_AMD_DC_SI", "DRM_AMD_ISP",
@@ -140,24 +137,11 @@ DISABLE_RULES = uniq_rules([
 
     # 非目标 Wi-Fi（保留 RTW88_8822CE 在保护列表中）
     *rules("wifi", "prefix", [
-        "ADM8211", "ATH", "AT76C50X", "B43", "BRCM", "CARL9170", "HOSTAP", "IPW2100",
-        "IPW2200", "IWLEGACY", "IWLWIFI", "IWLDVM", "IWLMVM", "IWLMLD", "LIBIPW",
-        "LIBERTAS", "MAC80211_HWSIM", "MT76", "MWIFIEX", "MWL8K", "ORINOCO", "P54",
-        "PLFXLC", "PRISM54", "QTNFMAC", "RSI_91X", "RT2X00", "RT2400PCI", "RT2500PCI",
-        "RT2500USB", "RT2800PCI", "RT2800USB", "RT61PCI", "RT73USB", "RTL8180", "RTL8187",
-        "RTL8192", "RTL8723", "RTL8XXXU", "RTL_CARDS", "RTLWIFI", "RTW89", "VIRT_WIFI",
-        "WFX", "WILC1000", "WL1251", "WL12XX", "WL18XX", "WLCORE", "ZD1211RW",
-    ]),
-    *rules("wifi-rtw88", "ns", [
-        "RTW88_8703B", "RTW88_8723C", "RTW88_8723D", "RTW88_8723X", "RTW88_8723CS",
-        "RTW88_8723DE", "RTW88_8723DS", "RTW88_8723DU", "RTW88_8812A", "RTW88_8812AU",
-        "RTW88_8814A", "RTW88_8814AE", "RTW88_8814AU", "RTW88_8821A", "RTW88_8821AU",
-        "RTW88_8821C", "RTW88_8821CE", "RTW88_8821CS", "RTW88_8821CU", "RTW88_8822B",
-        "RTW88_8822BE", "RTW88_8822BS", "RTW88_8822BU", "RTW88_8822CS", "RTW88_8822CU",
-        "RTW88_88XXA", "RTW88_USB", "RTW88_SDIO", "RTW88_DEBUG", "RTW88_DEBUGFS",
+        "ATH", "B43", "BRCM", "IWLWIFI", "IWLDVM", "IWLMVM", "IWLMLD",
+        "MT76", "RT2X00", "RTL8180", "RTL8187", "RTL8192", "RTL8723", "RTL8XXXU", "RTLWIFI", "RTW89",
     ]),
 
-    # 媒体采集/TV/DVB/摄像头
+    # 媒体采集/TV/DVB/摄像头（简化）
     *rules("media", "ns", [
         "MEDIA_SUPPORT", "MEDIA_CONTROLLER", "MEDIA_CAMERA_SUPPORT", "MEDIA_ANALOG_TV_SUPPORT",
         "MEDIA_DIGITAL_TV_SUPPORT", "MEDIA_RADIO_SUPPORT", "MEDIA_TEST_SUPPORT", "MEDIA_TUNER",
@@ -165,13 +149,8 @@ DISABLE_RULES = uniq_rules([
         "VIDEO_V4L2", "VIDEO_TUNER", "VIDEO_TVEEPROM",
     ]),
     *rules("media", "prefix", [
-        "DVB_", "IR_", "MEDIA_", "MEDIA_TUNER_", "RADIO_", "RC_", "VIDEO_", "VIDEOBUF2",
-        "VIDEO_AD", "VIDEO_AMD_ISP", "VIDEO_APTINA", "VIDEO_AU0828", "VIDEO_BT848", "VIDEO_CCS",
-        "VIDEO_CX", "VIDEO_DW", "VIDEO_EM28XX", "VIDEO_ET", "VIDEO_GC", "VIDEO_GO7007",
-        "VIDEO_HDPVR", "VIDEO_HI", "VIDEO_IMX", "VIDEO_INTEL_IPU", "VIDEO_IVTV", "VIDEO_MT9",
-        "VIDEO_OV", "VIDEO_PVRUSB2", "VIDEO_RDACM", "VIDEO_S5", "VIDEO_SAA", "VIDEO_SOLO6X10",
-        "VIDEO_STK1160", "VIDEO_TW", "VIDEO_USBTV", "VIDEO_VICODEC", "VIDEO_VIM", "VIDEO_VISL",
-        "VIDEO_VIVID", "VIDEO_ZORAN",
+        "DVB_", "IR_", "MEDIA_", "MEDIA_TUNER_", "RADIO_", "RC_", "VIDEO_",
+        "VIDEO_AMD_ISP", "VIDEO_INTEL_IPU", "VIDEO_VIVID",
     ]),
 
     # 非目标文件系统（保持 Btrfs/EROFS/F2FS 不动）
@@ -203,9 +182,9 @@ DISABLE_RULES = uniq_rules([
     ]),
     *rules("virt", "exact", ["HYPERVISOR_GUEST"]),
 
-    # 企业级/服务器网卡和 RDMA
+    # 企业级/服务器网卡和 RDMA（简化）
     *rules("nic", "prefix", [
-        "3C", "AQUANTIA", "ATL1", "ATLX", "BE2NET", "BNA", "BNX", "CHELSIO", "CXGB",
+        "3C", "BE2NET", "BNA", "BNX", "CHELSIO", "CXGB",
         "E1000", "FM10K", "I40E", "ICE", "IGB", "IGC", "INFINIBAND", "IXGB", "MLX",
         "NET_VENDOR_BROADCOM", "NET_VENDOR_CHELSIO", "NET_VENDOR_EMULEX", "NET_VENDOR_INTEL",
         "NET_VENDOR_MELLANOX", "NET_VENDOR_QLOGIC", "NET_VENDOR_SOLARFLARE", "QED", "QLA",
@@ -213,7 +192,7 @@ DISABLE_RULES = uniq_rules([
     ]),
     *rules("nic", "ns", ["AMD8111_ETH", "AMD_PHY", "AMD_QDMA", "AMD_XGBE"]),
 
-    # 笔记本/平板平台驱动（桌面不需要）
+    # 笔记本/平板平台驱动（桌面不需要，简化）
     *rules("laptop", "prefix", [
         "ACER_", "APPLE_", "ASUS_", "CHROMEOS", "CROS_", "CROS_EC", "DELL_",
         "LENOVO_", "MSI_", "PANASONIC_", "SAMSUNG_", "SONY_", "SURFACE", "THINKPAD_",
@@ -239,11 +218,11 @@ DISABLE_RULES = uniq_rules([
         "SND_HDA_CODEC_VIA", "SND_HDA_SCODEC",
     ]),
 
-    # 嵌入式传感器/MFD/regulator/电池（发行版 config 默认开启）
+    # 嵌入式传感器/MFD/regulator/电池（简化）
     *rules("embedded", "ns", ["IIO", "MFD", "REGULATOR", "POWER_SUPPLY", "PPS", "PTP_1588_CLOCK"]),
     *rules("embedded", "prefix", [
-        "BATTERY_", "CHARGER_", "IIO_", "MFD_", "REGULATOR_", "SENSORS_AD", "SENSORS_IIO_",
-        "SENSORS_INA", "SENSORS_LM", "SENSORS_MAX", "SENSORS_TPS",
+        "BATTERY_", "CHARGER_", "IIO_", "MFD_", "REGULATOR_",
+        "SENSORS_AD", "SENSORS_IIO_", "SENSORS_INA", "SENSORS_LM", "SENSORS_MAX", "SENSORS_TPS",
     ]),
 ])
 
