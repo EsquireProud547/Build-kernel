@@ -91,18 +91,12 @@ jobs:
       - name: 检出仓库
         uses: actions/checkout@v6
 
-      - name: 安装依赖
+      - name: 安装基础依赖
         run: |
           pacman -Syu --noconfirm --needed \
             base-devel \
-            bc bison flex \
-            clang llvm lld \
-            git libelf pahole python \
-            rust rust-bindgen rust-src \
-            tar xz zstd cpio perl openssl \
-            xxhash \
+            sudo \
             archlinux-keyring
-          pacman -Scc --noconfirm
 
       - name: 克隆 CachyOS PKGBUILD
         run: |
@@ -199,6 +193,7 @@ jobs:
           [ -f /tmp/cachyos-artifacts/PKGBUILD.final ] && cp /tmp/cachyos-artifacts/PKGBUILD.final artifacts/
 
           cd artifacts
+          shopt -s nullglob
           : > SHA256SUMS
           for f in *.pkg.tar.zst kernel.config config.pre_trim config.baseline PKGBUILD.final; do
             [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS
