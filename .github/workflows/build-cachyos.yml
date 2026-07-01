@@ -168,7 +168,6 @@ jobs:
               echo "  BBR3:     ${_tcp_bbr3:-默认}"
               echo "  精简:     ${_enable_trim:-默认}"
               echo "  并行:     $MAKEFLAGS"
-              unset CI GITHUB_RUN_ID
               makepkg -s --noconfirm --needed --nocheck --skipinteg
             '
 
