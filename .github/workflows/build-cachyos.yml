@@ -93,10 +93,7 @@ jobs:
 
       - name: 安装基础依赖
         run: |
-          pacman -Syu --noconfirm --needed \
-            base-devel \
-            sudo \
-            archlinux-keyring
+          pacman -Syu --noconfirm --needed base-devel git python tar xz zstd cpio sudo
 
       - name: 克隆 CachyOS PKGBUILD
         run: |
