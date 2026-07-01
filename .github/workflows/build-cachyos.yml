@@ -1,0 +1,213 @@
+# CachyOS 内核构建
+# 基于 linux-cachyos PKGBUILD，针对 AMD R5 4650GE 精简配置
+name: Build CachyOS Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_variant:
+        description: "内核变体"
+        required: true
+        type: choice
+        options:
+          - "linux-cachyos"
+          - "linux-cachyos-bmq"
+          - "linux-cachyos-bore"
+          - "linux-cachyos-deckify"
+          - "linux-cachyos-eevdf"
+          - "linux-cachyos-hardened"
+          - "linux-cachyos-lts"
+          - "linux-cachyos-rt-bore"
+          - "linux-cachyos-rc"
+          - "linux-cachyos-server"
+        default: "linux-cachyos"
+
+      cachyos_ref:
+        description: "CachyOS PKGBUILD Git 引用（分支/标签）"
+        required: true
+        type: string
+        default: "master"
+
+      lto_mode:
+        description: "LLVM LTO 模式"
+        required: true
+        type: choice
+        options:
+          - "thin"
+          - "none"
+          - "full"
+          - "thin-dist"
+        default: "thin"
+
+      processor_opt:
+        description: "CPU 优化目标（与 PKGBUILD _processor_opt 直接对应）"
+        required: true
+        type: choice
+        options:
+          - "generic_v3"
+          - "generic_v4"
+          - "zen4"
+          - "native"
+        default: "generic_v3"
+
+      tcp_bbr3:
+        description: "启用 BBR3 拥塞控制"
+        required: true
+        type: boolean
+        default: true
+
+      enable_config_trimming:
+        description: "精简内核配置（跳过高通/Intel/笔记本等无关驱动）"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.kernel_variant }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: "${{ inputs.kernel_variant }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    container:
+      image: archlinux:latest
+
+    env:
+      KERNEL_VARIANT: ${{ inputs.kernel_variant }}
+      _use_llvm_lto: ${{ inputs.lto_mode }}
+      _tcp_bbr3: ${{ inputs.tcp_bbr3 && 'yes' || 'no' }}
+      _enable_trim: ${{ inputs.enable_config_trimming && 'yes' || 'no' }}
+      _processor_opt: ${{ inputs.processor_opt }}
+      KBUILD_BUILD_HOST: cachyos
+      KBUILD_BUILD_USER: builder
+      KBUILD_BUILD_TIMESTAMP: ""
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+
+      - name: 安装依赖
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            bc bison flex \
+            clang llvm lld \
+            git libelf pahole python \
+            rust rust-bindgen rust-src \
+            tar xz zstd cpio perl openssl \
+            xxhash \
+            archlinux-keyring
+          pacman -Scc --noconfirm
+
+      - name: 克隆 CachyOS PKGBUILD
+        run: |
+          git clone --depth 1 --branch "${{ inputs.cachyos_ref }}" \
+            https://github.com/CachyOS/linux-cachyos.git cachyos
+
+      - name: 定制 PKGBUILD
+        run: |
+          set -euo pipefail
+          cd "cachyos/$KERNEL_VARIANT"
+
+          # 覆写 KBUILD_BUILD_*（PKGBUILD 内 export 会覆盖 env）
+          echo "=== [1/3] 覆写构建签名 ==="
+          sed -i 's/^export KBUILD_BUILD_HOST=.*/export KBUILD_BUILD_HOST=cachyos/' PKGBUILD
+          sed -i 's/^export KBUILD_BUILD_USER=.*/export KBUILD_BUILD_USER=builder/' PKGBUILD
+          sed -i 's/^export KBUILD_BUILD_TIMESTAMP=.*/export KBUILD_BUILD_TIMESTAMP="$(date -Ru)"/' PKGBUILD
+
+          # 注入 trim_config.py 到 prepare() 末尾
+          echo "=== [2/3] 注入配置精简 ==="
+          cp "$GITHUB_WORKSPACE/scripts/trim_config.py" .
+          if ! grep -q "### Save configuration for later reuse" PKGBUILD; then
+            echo "ERROR: 注入锚点不存在"
+            exit 1
+          fi
+          cat > /tmp/trim_inject.txt << 'TRIMEOF'
+          ### Config trimming (injected)
+          if [ "${_enable_trim}" = "yes" ] && [ -f "${srcdir}/../trim_config.py" ]; then
+              echo "Applying config trimming..."
+              cp .config .config.pre_trim
+              python3 "${srcdir}/../trim_config.py" .config .config.trimmed
+              if [ -f .config.trimmed ]; then
+                  mv .config.trimmed .config
+                  echo "Trim done: y=$(grep -c '=y' .config) m=$(grep -c '=m' .config)"
+                  make "${BUILD_FLAGS[@]}" olddefconfig
+                  make "${BUILD_FLAGS[@]}" prepare
+              fi
+          fi
+          TRIMEOF
+          sed -i '/### Save configuration for later reuse/r /tmp/trim_inject.txt' PKGBUILD
+          rm -f /tmp/trim_inject.txt
+          grep -q "Config trimming" PKGBUILD || { echo "ERROR: 注入失败"; exit 1; }
+
+          # 保存最终 PKGBUILD
+          echo "=== [3/3] 保存 PKGBUILD ==="
+          mkdir -p /tmp/cachyos-artifacts
+          cp PKGBUILD /tmp/cachyos-artifacts/PKGBUILD.final
+
+      - name: 构建内核
+        run: |
+          set -euo pipefail
+          MAKEFLAGS="-j$(nproc)"
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman' >/etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+          runuser -u builder -- env \
+            HOME=/home/builder \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            KERNEL_VARIANT="$KERNEL_VARIANT" \
+            MAKEFLAGS="$MAKEFLAGS" \
+            _use_llvm_lto="$_use_llvm_lto" \
+            _processor_opt="$_processor_opt" \
+            _tcp_bbr3="$_tcp_bbr3" \
+            _enable_trim="$_enable_trim" \
+            bash -c '
+              set -euo pipefail
+              cd "$GITHUB_WORKSPACE/cachyos/$KERNEL_VARIANT"
+              echo "=== 构建参数 ==="
+              echo "  变体:     $KERNEL_VARIANT"
+              echo "  LTO:      ${_use_llvm_lto:-默认}"
+              echo "  CPU:      ${_processor_opt:-默认}"
+              echo "  BBR3:     ${_tcp_bbr3:-默认}"
+              echo "  精简:     ${_enable_trim:-默认}"
+              echo "  并行:     $MAKEFLAGS"
+              unset CI GITHUB_RUN_ID
+              makepkg -s --noconfirm --needed --nocheck --skipinteg
+            '
+
+      - name: 收集产物
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          pkgs=$(find "cachyos/$KERNEL_VARIANT" -maxdepth 1 -name "*.pkg.tar.zst" -type f)
+          [ -n "$pkgs" ] && cp $pkgs artifacts/ || echo "WARN: 未找到包文件"
+
+          config=$(find "cachyos/$KERNEL_VARIANT/src" -name ".config" -type f 2>/dev/null | head -1)
+          [ -n "$config" ] && cp "$config" artifacts/kernel.config
+
+          pre=$(find "cachyos/$KERNEL_VARIANT/src" -name ".config.pre_trim" -type f 2>/dev/null | head -1)
+          [ -n "$pre" ] && cp "$pre" artifacts/config.pre_trim
+
+          [ -f "cachyos/$KERNEL_VARIANT/config" ] && cp "cachyos/$KERNEL_VARIANT/config" artifacts/config.baseline
+          [ -f /tmp/cachyos-artifacts/PKGBUILD.final ] && cp /tmp/cachyos-artifacts/PKGBUILD.final artifacts/
+
+          cd artifacts
+          : > SHA256SUMS
+          for f in *.pkg.tar.zst kernel.config config.pre_trim config.baseline PKGBUILD.final; do
+            [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS
+          done
+          echo "产物: $(wc -l < SHA256SUMS) 个文件"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: cachyos-kernel-${{ inputs.kernel_variant }}
+          path: artifacts/
+          retention-days: 7
