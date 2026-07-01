@@ -99,9 +99,6 @@ KEEP_EXACT = {
     "SERIO", "SERIO_I8042", "SERIO_LIBPS2",
     "KEYBOARD_ATKBD", "MOUSE_PS2",
     "I2C", "I2C_CHARDEV",
-
-    # DEBUG_INFO 基础（BTF/vmlinux.h 生成依赖，不可禁用）
-    "DEBUG_INFO",
 }
 
 KEEP_NS = {
