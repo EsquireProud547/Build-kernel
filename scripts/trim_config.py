@@ -99,6 +99,9 @@ KEEP_EXACT = {
     "SERIO", "SERIO_I8042", "SERIO_LIBPS2",
     "KEYBOARD_ATKBD", "MOUSE_PS2",
     "I2C", "I2C_CHARDEV",
+
+    # DEBUG_INFO 基础（BTF/vmlinux.h 生成依赖，不可禁用）
+    "DEBUG_INFO",
 }
 
 KEEP_NS = {
@@ -115,9 +118,16 @@ KEEP_NS = {
 DISABLE_RULES = uniq_rules([
     # 调试/测试/追踪
     *rules("debug", "ns", [
-        "DEBUG_INFO", "GDB_SCRIPTS", "GCOV", "KASAN", "KMSAN", "KCSAN", "UBSAN", "KCOV",
+        "GDB_SCRIPTS", "GCOV", "KASAN", "KMSAN", "KCSAN", "UBSAN", "KCOV",
         "KUNIT", "LKDTM", "FAULT_INJECTION", "NOTIFIER_ERROR_INJECTION", "X86_DECODER_SELFTEST",
         "PROVE_LOCKING", "LOCK_STAT", "LATENCYTOP", "PM_DEBUG", "WQ_WATCHDOG",
+    ]),
+    # DEBUG_INFO 子选项（互斥模式，需逐个处理，不能用 ns 一锅端）
+    *rules("debug", "exact", [
+        "DEBUG_INFO_NONE",             # "不调试"与 DEBUG_INFO=y 矛盾
+        "DEBUG_INFO_TOOLCHAIN_DEFAULT",# 让编译器决定 DWARF 版本，不可控
+        "DEBUG_INFO_DWARF4",           # 保留 REDUCED + BTF 即可，无需完整 DWARF
+        "DEBUG_INFO_DWARF5",           # 同上
     ]),
     *rules("debug", "prefix", ["TEST_"]),
     *rules("trace", "ns", [
