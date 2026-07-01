@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""内核 .config 精简脚本 — 针对 AMD R5 4650GE + RTL8822CE + Realtek 网卡。
-用法: python3 trim_config.py <输入> <输出>
-只将 CONFIG_FOO=y/m 改为 "# CONFIG_FOO is not set"，不动非布尔值和保护列表。
+"""内核 .config 精简脚本。
+
+目标硬件：AMD R5 4650GE + AMDGPU + RTL8822CE + Realtek 有线网卡。
+用法：python3 trim_config.py <输入配置> <输出配置>
+说明：仅将 CONFIG_FOO=y/m 改为未启用，不修改非布尔值。
 """
 
 from __future__ import annotations
@@ -20,12 +22,14 @@ ACTIVE_VALUES = {"y", "m"}
 
 @dataclass(frozen=True, slots=True)
 class Rule:
-    """匹配规则: exact=全等, ns=前缀+下划线族, prefix=纯前缀"""
+    """禁用规则。"""
+
     category: str
     pattern: str
     mode: str = "ns"
 
     def matches(self, key: str) -> bool:
+        """判断配置名是否命中规则。"""
         if self.mode == "exact":
             return key == self.pattern
         if self.mode == "ns":
@@ -36,24 +40,26 @@ class Rule:
 
 
 def rules(category: str, mode: str, patterns: Iterable[str]) -> list[Rule]:
-    return [Rule(category, p, mode) for p in patterns]
+    """批量生成规则。"""
+    return [Rule(category, pattern, mode) for pattern in patterns]
 
 
 def uniq_rules(items: Iterable[Rule]) -> list[Rule]:
+    """去重并保持顺序。"""
     seen: set[tuple[str, str, str]] = set()
-    out: list[Rule] = []
-    for r in items:
-        sig = (r.category, r.pattern, r.mode)
-        if sig not in seen:
-            seen.add(sig)
-            out.append(r)
-    return out
+    result: list[Rule] = []
+
+    for rule in items:
+        sig = (rule.category, rule.pattern, rule.mode)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        result.append(rule)
+
+    return result
 
 
-# ============================================================
-# 保护列表：启动/运行时必需 + 本机硬件（精简版）
-# ============================================================
-
+# 保护列表：不允许脚本关闭这些配置。
 KEEP_EXACT = {
     # x86 基础
     "64BIT", "X86", "X86_64", "SMP",
@@ -62,36 +68,36 @@ KEEP_EXACT = {
     "DEVTMPFS", "PROC_FS", "SYSFS", "TMPFS",
     "CGROUPS", "NAMESPACES", "SECCOMP", "BPF",
 
-    # 固件/平台/PCI/ACPI
+    # 固件、平台、PCI、ACPI
     "PCI", "PCI_MSI", "PCI_QUIRKS", "PCIEPORTBUS",
     "ACPI", "DMI", "EFI", "EFI_PARTITION",
     "MICROCODE", "CPU_SUP_AMD", "X86_MCE", "X86_MCE_AMD",
     "AMD_NB", "AMD_PMC",
 
-    # 存储 + 根文件系统
+    # 存储和根文件系统
     "BLOCK", "BLK_DEV", "BLK_DEV_SD",
     "SCSI", "SCSI_MOD", "SCSI_COMMON", "SCSI_DMA",
     "ATA", "SATA_HOST", "SATA_AHCI",
     "XFS_FS", "FS_IOMAP",
 
-    # AMD Renoir/Vega 显卡 + 控制台
+    # AMD 显卡和控制台
     "DRM", "DRM_KMS_HELPER", "DRM_DISPLAY_HELPER",
     "DRM_AMDGPU", "DRM_AMD_DC", "DRM_TTM",
     "FRAMEBUFFER_CONSOLE", "VGA_CONSOLE",
 
-    # Realtek RTL8822CE Wi-Fi + Realtek 网卡
+    # Realtek 无线和有线网络
     "NET", "ETHERNET", "NETDEVICES", "PHYLIB", "PHYLINK",
     "R8169", "REALTEK_PHY",
     "WIRELESS", "WLAN", "CFG80211", "MAC80211", "RFKILL",
     "RTW88", "RTW88_CORE", "RTW88_PCI", "RTW88_8822C", "RTW88_8822CE",
 
-    # HDA 音频: Realtek codec + HDMI/DP
+    # HDA 音频
     "SOUND", "SND", "SND_TIMER", "SND_PCM", "SND_JACK",
     "SND_HDA", "SND_HDA_CORE", "SND_HDA_INTEL",
     "SND_HDA_CODEC_REALTEK", "SND_HDA_CODEC_REALTEK_LIB",
     "SND_HDA_CODEC_HDMI",
 
-    # USB / HID / 输入
+    # USB、HID、输入
     "USB_SUPPORT", "USB_COMMON", "USB", "USB_PCI",
     "USB_XHCI_HCD", "USB_XHCI_PCI",
     "USB_HID", "USB_STORAGE",
@@ -100,201 +106,176 @@ KEEP_EXACT = {
 }
 
 KEEP_NS = {
-    # 保护子选项族（主键已在 KEEP_EXACT 中）
-    "XFS",       # XFS_POSIX_ACL, XFS_ONLINE_SCRUB 等
-    "USB_XHCI",  # USB_XHCI_DBGCAP 等（HCD/PCI 已在 KEEP_EXACT）
+    # 保护子项族。
+    "XFS",
+    "USB_XHCI",
 }
 
 
-# ============================================================
-# 禁用列表：AMD 桌面精简配置（精简版）
-# ============================================================
-
+# 禁用列表：只关闭确定不需要且风险较低的功能。
 DISABLE_RULES = uniq_rules([
-    # 调试/测试/追踪（保留核心禁用）
+    # 调试和测试
     *rules("debug", "ns", [
         "KASAN", "KMSAN", "KCSAN", "UBSAN", "KCOV",
         "KUNIT", "LKDTM", "FAULT_INJECTION",
         "PROVE_LOCKING", "LOCK_STAT", "LATENCYTOP",
     ]),
     *rules("debug", "prefix", ["TEST_"]),
-    *rules("trace", "ns", [
-        "FTRACE", "FUNCTION_TRACER", "FUNCTION_GRAPH_TRACER",
-        "KPROBES", "KRETPROBES", "UPROBES", "TRACEPOINTS", "TRACING",
-        "DYNAMIC_DEBUG", "SCHEDSTATS", "BLK_DEV_IO_TRACE",
-    ]),
 
-    # 非目标 GPU（Intel/NVIDIA/VMware/QEMU/老旧显卡）
+    # 非目标物理 GPU
     *rules("gpu", "ns", [
-        "DRM_I915", "DRM_XE", "DRM_NOUVEAU", "DRM_RADEON", "DRM_VMWGFX", "DRM_VBOXVIDEO",
-        "DRM_QXL", "DRM_BOCHS", "DRM_CIRRUS_QEMU", "DRM_GMA500", "DRM_AST", "DRM_MGAG200",
-        "DRM_UDL", "DRM_VIRTIO_GPU", "DRM_HYPERV", "DRM_XEN",
-        "FB_NVIDIA", "FB_RIVA", "FB_RADEON", "FB_I740", "FB_SIS", "FB_VIA", "FB_VIRTUAL",
+        "DRM_I915", "DRM_XE", "DRM_NOUVEAU", "DRM_RADEON",
+        "DRM_GMA500", "DRM_AST", "DRM_MGAG200",
+        "FB_NVIDIA", "FB_RIVA", "FB_RADEON", "FB_I740", "FB_SIS", "FB_VIA",
     ]),
     *rules("gpu", "exact", [
         "DRM_AMDGPU_SI", "DRM_AMDGPU_CIK", "DRM_AMD_DC_SI", "DRM_AMD_ISP",
     ]),
 
-    # 非目标 Wi-Fi（保留 RTW88_8822CE 在保护列表中）
+    # 非目标 Wi-Fi
     *rules("wifi", "prefix", [
         "ATH", "B43", "BRCM", "IWLWIFI", "IWLDVM", "IWLMVM", "IWLMLD",
-        "MT76", "RT2X00", "RTL8180", "RTL8187", "RTL8192", "RTL8723", "RTL8XXXU", "RTLWIFI", "RTW89",
+        "MT76", "RT2X00", "RTL8180", "RTL8187", "RTL8192", "RTL8723",
+        "RTL8XXXU", "RTLWIFI", "RTW89",
     ]),
 
-    # 媒体采集/TV/DVB/摄像头（简化）
+    # 电视、广播、遥控相关媒体功能
     *rules("media", "ns", [
-        "MEDIA_SUPPORT", "MEDIA_CONTROLLER", "MEDIA_CAMERA_SUPPORT", "MEDIA_ANALOG_TV_SUPPORT",
-        "MEDIA_DIGITAL_TV_SUPPORT", "MEDIA_RADIO_SUPPORT", "MEDIA_TEST_SUPPORT", "MEDIA_TUNER",
-        "DVB", "RC_CORE", "LIRC", "RADIO", "V4L2_LOOPBACK", "VIDEO_DEV", "VIDEOBUF2",
-        "VIDEO_V4L2", "VIDEO_TUNER", "VIDEO_TVEEPROM",
+        "MEDIA_ANALOG_TV_SUPPORT", "MEDIA_DIGITAL_TV_SUPPORT",
+        "MEDIA_RADIO_SUPPORT", "MEDIA_TEST_SUPPORT", "MEDIA_TUNER",
+        "DVB", "RC_CORE", "LIRC", "RADIO", "V4L2_LOOPBACK",
+        "VIDEO_TUNER", "VIDEO_TVEEPROM",
     ]),
     *rules("media", "prefix", [
-        "DVB_", "IR_", "MEDIA_", "MEDIA_TUNER_", "RADIO_", "RC_", "VIDEO_",
-        "VIDEO_AMD_ISP", "VIDEO_INTEL_IPU", "VIDEO_VIVID",
+        "DVB_", "IR_", "MEDIA_TUNER_", "RADIO_", "RC_",
     ]),
 
-    # 非目标文件系统（保持 Btrfs/EROFS/F2FS 不动）
+    # 老旧文件系统
     *rules("fs-old", "ns", [
         "ADFS_FS", "AFFS_FS", "BEFS_FS", "BFS_FS", "CRAMFS", "EFS_FS",
-        "GFS2_FS", "HFS_FS", "HFSPLUS_FS", "HPFS_FS", "JFFS2_FS",
-        "JFS_FS", "MINIX_FS", "OCFS2_FS", "OMFS_FS", "QNX4FS_FS", "QNX6FS_FS",
-        "REISERFS_FS", "ROMFS_FS", "SQUASHFS", "UBIFS_FS", "UFS_FS", "VXFS_FS",
+        "GFS2_FS", "HPFS_FS", "JFFS2_FS", "JFS_FS", "MINIX_FS",
+        "OCFS2_FS", "OMFS_FS", "QNX4FS_FS", "QNX6FS_FS",
+        "REISERFS_FS", "ROMFS_FS", "UBIFS_FS", "UFS_FS", "VXFS_FS",
     ]),
-    *rules("fs-net", "ns", [
-        "9P_FS", "AFS_FS", "CEPH_FS", "CIFS", "CODA_FS", "NET_9P", "NFS_COMMON",
-        "NFS_FS", "NFSD", "ORANGEFS_FS", "SMB_SERVER", "SMBDIRECT", "SMBFS",
-    ]),
-    *rules("fs-net", "prefix", ["9P_", "NFS_"]),
 
-    # 废旧总线/协议/小众网络
+    # 旧总线和小众协议
     *rules("legacy", "ns", [
         "6LOWPAN", "ATM", "AX25", "BATMAN_ADV", "CAN", "FDDI", "FIREWIRE", "GPIB",
-        "HIPPI", "HSR", "IEEE1394", "IEEE802154", "ISDN", "L2TP", "LAPB", "MTD",
-        "NET_DSA", "NFC", "OPENVSWITCH", "PARIDE", "PCCARD", "PCMCIA", "QRTR", "TIPC",
+        "HIPPI", "HSR", "IEEE1394", "IEEE802154", "ISDN", "LAPB", "MTD",
+        "NET_DSA", "NFC", "PARIDE", "PCCARD", "PCMCIA", "QRTR", "TIPC",
         "WIMAX", "X25",
     ]),
 
-    # 虚拟化（桌面无需 KVM/virtio/xen/hyperv）
-    *rules("virt", "ns", [
-        "ACRN_GUEST", "BHYVE_GUEST", "HYPERV", "INTEL_TDX_GUEST", "JAILHOUSE_GUEST",
-        "KVM", "TDX_GUEST_DRIVER", "VBOXGUEST", "VDPA",
-        "VHOST", "VIRTIO", "VMWARE_BALLOON", "VMWARE_VMCI", "VMXNET3", "XEN",
-    ]),
-    *rules("virt", "exact", ["HYPERVISOR_GUEST"]),
-
-    # 企业级/服务器网卡和 RDMA（简化）
+    # 企业级网卡和 RDMA
     *rules("nic", "prefix", [
-        "3C", "BE2NET", "BNA", "BNX", "CHELSIO", "CXGB",
-        "E1000", "FM10K", "I40E", "ICE", "IGB", "IGC", "INFINIBAND", "IXGB", "MLX",
-        "NET_VENDOR_BROADCOM", "NET_VENDOR_CHELSIO", "NET_VENDOR_EMULEX", "NET_VENDOR_INTEL",
-        "NET_VENDOR_MELLANOX", "NET_VENDOR_QLOGIC", "NET_VENDOR_SOLARFLARE", "QED", "QLA",
-        "QLCNIC", "RDMA", "SFC",
+        "3C", "BE2NET", "BNA", "BNX", "CHELSIO", "CXGB", "FM10K",
+        "I40E", "ICE", "INFINIBAND", "IXGB", "MLX",
+        "NET_VENDOR_CHELSIO", "NET_VENDOR_EMULEX", "NET_VENDOR_MELLANOX",
+        "NET_VENDOR_QLOGIC", "NET_VENDOR_SOLARFLARE", "QED", "QLA", "QLCNIC", "RDMA", "SFC",
     ]),
     *rules("nic", "ns", ["AMD8111_ETH", "AMD_PHY", "AMD_QDMA", "AMD_XGBE"]),
 
-    # 笔记本/平板平台驱动（桌面不需要，简化）
-    # 注意：AMD_PMC 和 AMD_PMF 已移除，AMD_PMC 对 Renoir 架构电源管理必需
+    # 非目标品牌平台驱动
     *rules("laptop", "prefix", [
         "ACER_", "APPLE_", "ASUS_", "CHROMEOS", "CROS_", "CROS_EC", "DELL_",
-        "LENOVO_", "MSI_", "PANASONIC_", "SAMSUNG_", "SONY_", "SURFACE", "THINKPAD_",
-        "TOSHIBA_",
+        "MSI_", "PANASONIC_", "SAMSUNG_", "SONY_", "SURFACE", "TOSHIBA_",
     ]),
     *rules("laptop", "ns", [
         "AMD_AE4DMA", "AMD_HSMP", "AMD_ISP_PLATFORM", "AMD_PTDMA",
-        "AMD_SFH_HID", "AMDTEE", "HP_ACCEL", "HP_BIOSCFG", "HP_ILO", "HP_WATCHDOG", "HP_WMI",
-        "SURFACE3_WMI",
+        "HP_ACCEL", "HP_BIOSCFG", "HP_ILO", "HP_WATCHDOG", "HP_WMI", "SURFACE3_WMI",
     ]),
 
-    # 触摸屏/数位板/手柄
-    *rules("input-xtra", "prefix", [
-        "GAMEPORT", "HID_SENSOR_", "HID_WACOM", "INPUT_TABLET", "INPUT_TOUCHSCREEN",
-        "JOYSTICK_", "TABLET_USB_", "TOUCHSCREEN_", "WACOM",
-    ]),
-
-    # 多余 HDA codec（保留 Realtek + HDMI）
+    # 多余 HDA codec
     *rules("audio-xtra", "ns", [
         "SND_HDA_CODEC_ANALOG", "SND_HDA_CODEC_CA0110", "SND_HDA_CODEC_CA0132",
         "SND_HDA_CODEC_CIRRUS", "SND_HDA_CODEC_CMEDIA", "SND_HDA_CODEC_CONEXANT",
-        "SND_HDA_CODEC_SENARYTECH", "SND_HDA_CODEC_SI3054", "SND_HDA_CODEC_SIGMATEL",
-        "SND_HDA_CODEC_VIA", "SND_HDA_SCODEC",
-    ]),
-
-    # 嵌入式传感器/MFD/regulator/电池（简化）
-    *rules("embedded", "ns", ["IIO", "MFD", "REGULATOR", "POWER_SUPPLY", "PPS", "PTP_1588_CLOCK"]),
-    *rules("embedded", "prefix", [
-        "BATTERY_", "CHARGER_", "IIO_", "MFD_", "REGULATOR_",
-        "SENSORS_AD", "SENSORS_IIO_", "SENSORS_INA", "SENSORS_LM", "SENSORS_MAX", "SENSORS_TPS",
+        "SND_HDA_CODEC_SENARYTECH", "SND_HDA_CODEC_SI3054",
+        "SND_HDA_CODEC_SIGMATEL", "SND_HDA_CODEC_VIA", "SND_HDA_SCODEC",
     ]),
 ])
 
-# 禁止对关键族使用 prefix 模式（太危险）
+
+# 禁止危险前缀规则。
 BANNED_PREFIX = {
     "ACPI_", "AMD_", "ATA_", "DRM_", "HID_", "I2C_", "INPUT_", "INTEL_",
     "NET_", "PCI_", "PHY_", "SATA_", "SCSI_", "SND_", "USB_",
 }
-for _r in DISABLE_RULES:
-    if _r.mode == "prefix" and _r.pattern in BANNED_PREFIX:
-        raise RuntimeError(f"危险 prefix 规则: {_r.pattern}")
 
+for _rule in DISABLE_RULES:
+    if _rule.mode == "prefix" and _rule.pattern in BANNED_PREFIX:
+        raise RuntimeError(f"危险 prefix 规则: {_rule.pattern}")
 
-# ============================================================
-# 核心逻辑
-# ============================================================
 
 def parse_config(text: str) -> dict[str, str]:
-    vals: dict[str, str] = {}
+    """解析 .config。"""
+    values: dict[str, str] = {}
+
     for line in text.splitlines():
-        if m := CONFIG_SET_RE.match(line):
-            vals[m.group(1)] = m.group(2)
-        elif m := CONFIG_NOT_SET_RE.match(line):
-            vals[m.group(1)] = "n"
-    return vals
+        if match := CONFIG_SET_RE.match(line):
+            values[match.group(1)] = match.group(2)
+        elif match := CONFIG_NOT_SET_RE.match(line):
+            values[match.group(1)] = "n"
+
+    return values
 
 
 def is_protected(key: str) -> bool:
-    return key in KEEP_EXACT or any(key == p or key.startswith(p + "_") for p in KEEP_NS)
+    """判断配置是否受保护。"""
+    return key in KEEP_EXACT or any(key == prefix or key.startswith(prefix + "_") for prefix in KEEP_NS)
 
 
 def first_rule(key: str) -> Rule | None:
-    for r in DISABLE_RULES:
-        if r.matches(key):
-            return r
+    """返回首个命中规则。"""
+    for rule in DISABLE_RULES:
+        if rule.matches(key):
+            return rule
     return None
 
 
 def trim_config(text: str) -> tuple[str, list[tuple[str, str]]]:
-    out: list[str] = []
+    """执行精简。"""
+    output: list[str] = []
     disabled: list[tuple[str, str]] = []
+
     for line in text.splitlines():
-        m = CONFIG_SET_RE.match(line)
-        if not m:
-            out.append(line)
+        match = CONFIG_SET_RE.match(line)
+        if not match:
+            output.append(line)
             continue
-        key, val = m.group(1), m.group(2)
-        rule = None if val not in ACTIVE_VALUES or is_protected(key) else first_rule(key)
+
+        key, value = match.group(1), match.group(2)
+        rule = None if value not in ACTIVE_VALUES or is_protected(key) else first_rule(key)
+
         if rule is None:
-            out.append(line)
-        else:
-            out.append(f"# CONFIG_{key} is not set")
-            disabled.append((key, rule.category))
-    return "\n".join(out) + "\n", disabled
+            output.append(line)
+            continue
+
+        output.append(f"# CONFIG_{key} is not set")
+        disabled.append((key, rule.category))
+
+    return "\n".join(output) + "\n", disabled
 
 
 def validate_protected(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    errs: list[str] = []
-    for key, val in sorted(before.items()):
-        if val in ACTIVE_VALUES and is_protected(key) and after.get(key) not in ACTIVE_VALUES:
-            errs.append(f"CONFIG_{key}: {val} -> {after.get(key)!r}")
-    return errs
+    """确认保护项未被关闭。"""
+    errors: list[str] = []
+
+    for key, value in sorted(before.items()):
+        if value in ACTIVE_VALUES and is_protected(key) and after.get(key) not in ACTIVE_VALUES:
+            errors.append(f"CONFIG_{key}: {value} -> {after.get(key)!r}")
+
+    return errors
 
 
-def counts(vals: dict[str, str]) -> tuple[int, int]:
-    return sum(v == "y" for v in vals.values()), sum(v == "m" for v in vals.values())
+def counts(values: dict[str, str]) -> tuple[int, int]:
+    """统计 y 和 m。"""
+    return sum(value == "y" for value in values.values()), sum(value == "m" for value in values.values())
 
 
 def main() -> int:
+    """命令行入口。"""
     if len(sys.argv) != 3:
-        print(f"用法: python3 {Path(sys.argv[0]).name} <输入> <输出>", file=sys.stderr)
+        print(f"用法: python3 {Path(sys.argv[0]).name} <输入配置> <输出配置>", file=sys.stderr)
         return 1
 
     src, dst = Path(sys.argv[1]), Path(sys.argv[2])
@@ -307,26 +288,28 @@ def main() -> int:
     dst_text, disabled = trim_config(src_text)
     after = parse_config(dst_text)
 
-    errs = validate_protected(before, after)
-    if errs:
-        print("错误: 受保护项被误关闭:", file=sys.stderr)
-        for e in errs:
-            print(f"  {e}", file=sys.stderr)
+    errors = validate_protected(before, after)
+    if errors:
+        print("错误: 保护项被关闭:", file=sys.stderr)
+        for error in errors:
+            print(f"  {error}", file=sys.stderr)
         return 3
 
     dst.write_text(dst_text, encoding="utf-8")
 
-    by, bm = counts(before)
-    ay, am = counts(after)
-    bt, at = by + bm, ay + am
-    print(f"裁剪前: =y {by}  =m {bm}  共 {bt}")
-    print(f"裁剪后: =y {ay}  =m {am}  共 {at}")
-    print(f"减少: {bt - at} 项 → {dst}")
+    before_y, before_m = counts(before)
+    after_y, after_m = counts(after)
+    before_total = before_y + before_m
+    after_total = after_y + after_m
+
+    print(f"裁剪前: =y {before_y}  =m {before_m}  共 {before_total}")
+    print(f"裁剪后: =y {after_y}  =m {after_m}  共 {after_total}")
+    print(f"减少: {before_total - after_total} 项 → {dst}")
 
     if disabled:
         print("分类:")
-        for cat, n in sorted(Counter(c for _, c in disabled).items()):
-            print(f"  {cat}: {n}")
+        for category, count in sorted(Counter(category for _, category in disabled).items()):
+            print(f"  {category}: {count}")
 
     return 0
 
