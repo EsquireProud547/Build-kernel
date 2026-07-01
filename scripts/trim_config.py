@@ -66,7 +66,7 @@ KEEP_EXACT = {
     "PCI", "PCI_MSI", "PCI_QUIRKS", "PCIEPORTBUS",
     "ACPI", "DMI", "EFI", "EFI_PARTITION",
     "MICROCODE", "CPU_SUP_AMD", "X86_MCE", "X86_MCE_AMD",
-    "AMD_NB",
+    "AMD_NB", "AMD_PMC",
 
     # 存储 + 根文件系统
     "BLOCK", "BLK_DEV", "BLK_DEV_SD",
@@ -193,13 +193,14 @@ DISABLE_RULES = uniq_rules([
     *rules("nic", "ns", ["AMD8111_ETH", "AMD_PHY", "AMD_QDMA", "AMD_XGBE"]),
 
     # 笔记本/平板平台驱动（桌面不需要，简化）
+    # 注意：AMD_PMC 和 AMD_PMF 已移除，AMD_PMC 对 Renoir 架构电源管理必需
     *rules("laptop", "prefix", [
         "ACER_", "APPLE_", "ASUS_", "CHROMEOS", "CROS_", "CROS_EC", "DELL_",
         "LENOVO_", "MSI_", "PANASONIC_", "SAMSUNG_", "SONY_", "SURFACE", "THINKPAD_",
         "TOSHIBA_",
     ]),
     *rules("laptop", "ns", [
-        "AMD_AE4DMA", "AMD_HSMP", "AMD_ISP_PLATFORM", "AMD_PMC", "AMD_PMF", "AMD_PTDMA",
+        "AMD_AE4DMA", "AMD_HSMP", "AMD_ISP_PLATFORM", "AMD_PTDMA",
         "AMD_SFH_HID", "AMDTEE", "HP_ACCEL", "HP_BIOSCFG", "HP_ILO", "HP_WATCHDOG", "HP_WMI",
         "SURFACE3_WMI",
     ]),
