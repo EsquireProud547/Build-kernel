@@ -119,12 +119,14 @@ DISABLE_RULES = uniq_rules([
         "WIMAX", "X25",
     ]),
 
-    # 企业级网卡和 RDMA
+    # 企业级网卡、RDMA 及 Intel 桌面/工作站网卡
+    # 目标平台使用 Realtek RTL8168/RTL8822CE，以下 Intel 网卡均无用
     *rules("nic", "prefix", [
         "3C", "BE2NET", "BNA", "BNX", "CHELSIO", "CXGB", "FM10K",
         "I40E", "ICE", "INFINIBAND", "IXGB", "MLX",
         "NET_VENDOR_CHELSIO", "NET_VENDOR_EMULEX", "NET_VENDOR_MELLANOX",
         "NET_VENDOR_QLOGIC", "NET_VENDOR_SOLARFLARE", "QED", "QLA", "QLCNIC", "RDMA", "SFC",
+        "E1000", "IGB", "IGC", "IAVF", "IGBVF",  # Intel 桌面/工作站网卡
     ]),
     *rules("nic", "ns", ["AMD8111_ETH", "AMD_PHY", "AMD_QDMA", "AMD_XGBE"]),
 
@@ -146,6 +148,55 @@ DISABLE_RULES = uniq_rules([
         "SND_HDA_CODEC_CIRRUS", "SND_HDA_CODEC_CMEDIA", "SND_HDA_CODEC_CONEXANT",
         "SND_HDA_CODEC_SENARYTECH", "SND_HDA_CODEC_SI3054",
         "SND_HDA_CODEC_SIGMATEL", "SND_HDA_CODEC_VIA", "SND_HDA_SCODEC",
+    ]),
+
+    # Intel 平台相关驱动与特性
+    # 目标平台为 AMD Ryzen PRO 4650GE，无 Intel 硬件，以下均为 Intel 专属选项
+    *rules("intel-pm", "exact", [
+        "X86_INTEL_PSTATE",   # Intel P-state 驱动，AMD 使用 amd-pstate / acpi-cpufreq
+        "INTEL_IDLE",         # Intel idle 驱动
+    ]),
+    *rules("intel-sec", "exact", [
+        "X86_SGX",                          # Intel Software Guard Extensions
+        "X86_SGX_KVM",                      # Intel SGX 虚拟化支持
+        "INTEL_TDX_HOST",                   # Intel Trust Domain Extensions
+        "X86_USER_SHADOW_STACK",            # CET/Shadow Stack，Zen2 无硬件支持
+        "X86_INTEL_MEMORY_PROTECTION_KEYS", # Intel MPK/PKU，Zen2 不支持
+        "X86_VMX_FEATURE_NAMES",            # Intel VMX 特性名称字符串表
+    ]),
+    *rules("intel-platform", "exact", [
+        "X86_INTEL_LPSS",            # Intel Low Power Subsystem
+        "IOSF_MBI",                  # Intel OnChip System Fabric
+        "INTEL_IPS",                 # Intel 图形省电驱动
+        "INTEL_PUNIT_IPC",           # Intel PUnit IPC
+        "INTEL_VSEC",                # Intel Vendor Specific Extended Capabilities
+        "INTEL_TH",                  # Intel Trace Hub
+        "INTEL_VBTN",                # Intel 虚拟按钮
+        "INTEL_VLPM",                # Intel 虚拟低功耗管理
+        "BYTCRC_PMIC_OPREGION",      # Intel Atom/Cherry Trail PMIC
+        "CHTCRC_PMIC_OPREGION",
+        "XPOWER_PMIC_OPREGION",
+        "BXT_WC_PMIC_OPREGION",
+        "CHT_WC_PMIC_OPREGION",
+        "CHT_DC_TI_PMIC_OPREGION",
+        "TPS68470_PMIC_OPREGION",
+    ]),
+    *rules("intel-platform", "ns", [
+        "INTEL_MEI",      # Intel Management Engine Interface
+        "INTEL_SCU",      # Intel System Controller Unit
+        "INTEL_HID",      # Intel HID 设备驱动
+        "INTEL_PMT",      # Intel Platform Monitoring Technology
+        "INTEL_IOMMU",    # Intel VT-d，与 AMD-Vi 独立
+    ]),
+    *rules("intel-dptf", "ns", [
+        "ACPI_DPTF",       # Intel Dynamic Platform Thermal Framework
+        "DPTF_POWER",
+        "DPTF_PCH_FIVR",
+    ]),
+    *rules("intel-pmu", "ns", [
+        "PERF_EVENTS_INTEL_UNCORE",  # Intel uncore 性能事件
+        "PERF_EVENTS_INTEL_RAPL",    # Intel RAPL 性能事件
+        "PERF_EVENTS_INTEL_CSTATE",  # Intel C-state 性能事件（Intel 专属）
     ]),
 ])
 
