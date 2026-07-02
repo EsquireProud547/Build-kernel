@@ -59,57 +59,10 @@ def uniq_rules(items: Iterable[Rule]) -> list[Rule]:
     return result
 
 
-# 保护列表：不允许脚本关闭这些配置。
-KEEP_EXACT = {
-    # x86 基础
-    "64BIT", "X86", "X86_64", "SMP",
-    "MODULES", "MODULE_UNLOAD",
-    "BINFMT_ELF", "BINFMT_SCRIPT",
-    "DEVTMPFS", "PROC_FS", "SYSFS", "TMPFS",
-    "CGROUPS", "NAMESPACES", "SECCOMP", "BPF",
-
-    # 固件、平台、PCI、ACPI
-    "PCI", "PCI_MSI", "PCI_QUIRKS", "PCIEPORTBUS",
-    "ACPI", "DMI", "EFI", "EFI_PARTITION",
-    "MICROCODE", "CPU_SUP_AMD", "X86_MCE", "X86_MCE_AMD",
-    "AMD_NB", "AMD_PMC",
-
-    # 存储和根文件系统
-    "BLOCK", "BLK_DEV", "BLK_DEV_SD",
-    "SCSI", "SCSI_MOD", "SCSI_COMMON", "SCSI_DMA",
-    "ATA", "SATA_HOST", "SATA_AHCI",
-    "XFS_FS", "FS_IOMAP",
-
-    # AMD 显卡和控制台
-    "DRM", "DRM_KMS_HELPER", "DRM_DISPLAY_HELPER",
-    "DRM_AMDGPU", "DRM_AMD_DC", "DRM_TTM",
-    "FRAMEBUFFER_CONSOLE", "VGA_CONSOLE",
-
-    # Realtek 无线和有线网络
-    "NET", "ETHERNET", "NETDEVICES", "PHYLIB", "PHYLINK",
-    "R8169", "REALTEK_PHY",
-    "WIRELESS", "WLAN", "CFG80211", "MAC80211", "RFKILL",
-    "RTW88", "RTW88_CORE", "RTW88_PCI", "RTW88_8822C", "RTW88_8822CE",
-
-    # HDA 音频
-    "SOUND", "SND", "SND_TIMER", "SND_PCM", "SND_JACK",
-    "SND_HDA", "SND_HDA_CORE", "SND_HDA_INTEL",
-    "SND_HDA_CODEC_REALTEK", "SND_HDA_CODEC_REALTEK_LIB",
-    "SND_HDA_CODEC_HDMI",
-
-    # USB、HID、输入
-    "USB_SUPPORT", "USB_COMMON", "USB", "USB_PCI",
-    "USB_XHCI_HCD", "USB_XHCI_PCI",
-    "USB_HID", "USB_STORAGE",
-    "HID", "HID_GENERIC",
-    "INPUT", "INPUT_EVDEV",
-}
-
-KEEP_NS = {
-    # 保护子项族。
-    "XFS",
-    "USB_XHCI",
-}
+# 保护列表：仅在禁用规则明确命中的情况下才需要加入保护。
+# 当前所有禁用规则均为精确/定向匹配，不会误伤核心子系统配置，因此保护列表留空。
+KEEP_EXACT: set[str] = set()
+KEEP_NS: set[str] = set()
 
 
 # 禁用列表：只关闭确定不需要且风险较低的功能。
@@ -180,8 +133,10 @@ DISABLE_RULES = uniq_rules([
         "ACER_", "APPLE_", "ASUS_", "CHROMEOS", "CROS_", "CROS_EC", "DELL_",
         "MSI_", "PANASONIC_", "SAMSUNG_", "SONY_", "SURFACE", "TOSHIBA_",
     ]),
+    # 注意：AMD_HSMP / AMD_AE4DMA / AMD_PTDMA 已从此处移出，
+    # 它们是 Ryzen PRO 4650GE 平台可用的硬件特性，不应禁用。
     *rules("laptop", "ns", [
-        "AMD_AE4DMA", "AMD_HSMP", "AMD_ISP_PLATFORM", "AMD_PTDMA",
+        "AMD_ISP_PLATFORM",
         "HP_ACCEL", "HP_BIOSCFG", "HP_ILO", "HP_WATCHDOG", "HP_WMI", "SURFACE3_WMI",
     ]),
 
