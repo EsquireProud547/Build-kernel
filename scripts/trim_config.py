@@ -112,9 +112,10 @@ DISABLE_RULES = uniq_rules([
     ]),
 
     # 旧总线和小众协议
+    # 注意：未禁用 MTD，部分 TPM/固件更新工具可能依赖 /dev/mtd
     *rules("legacy", "ns", [
         "6LOWPAN", "ATM", "AX25", "BATMAN_ADV", "CAN", "FDDI", "FIREWIRE", "GPIB",
-        "HIPPI", "HSR", "IEEE1394", "IEEE802154", "ISDN", "LAPB", "MTD",
+        "HIPPI", "HSR", "IEEE1394", "IEEE802154", "ISDN", "LAPB",
         "NET_DSA", "NFC", "PARIDE", "PCCARD", "PCMCIA", "QRTR", "TIPC",
         "WIMAX", "X25",
     ]),
