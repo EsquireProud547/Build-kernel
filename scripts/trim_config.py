@@ -84,6 +84,18 @@ DISABLE_RULES = uniq_rules([
     *rules("gpu", "exact", [
         "DRM_AMDGPU_SI", "DRM_AMDGPU_CIK", "DRM_AMD_DC_SI", "DRM_AMD_ISP",
     ]),
+    # 虚拟机/仿真 GPU 及旧 framebuffer 驱动
+    # 目标平台为裸机桌面，使用 AMD Renoir APU
+    *rules("gpu", "exact", [
+        "DRM_VBOXVIDEO", "DRM_VIRTIO_GPU", "DRM_QXL", "DRM_BOCHS",
+        "DRM_CIRRUS_QXL", "DRM_UDL", "VGA_SWITCHEROO",
+        "FB_INTEL", "FB_MATROX", "FB_NEOMAGIC", "FB_TRIDENT", "FB_CIRRUS",
+        "FB_ARK", "FB_ASILIANT", "FB_TMIO", "FB_3DFX", "FB_VOODOO1",
+        "FB_CYBLA", "FB_CYBER2000",
+    ]),
+    *rules("gpu", "prefix", [
+        "FB_ATY", "FB_S3", "FB_SAVAGE",  # 旧 ATI/S3/S3 Savage framebuffer
+    ]),
 
     # 非目标 Wi-Fi
     *rules("wifi", "prefix", [
@@ -102,12 +114,21 @@ DISABLE_RULES = uniq_rules([
     *rules("media", "prefix", [
         "DVB_", "IR_", "MEDIA_TUNER_", "RADIO_", "RC_",
     ]),
+    # 老旧 PCI/USB 电视采集卡（非 UVC 摄像头）
+    *rules("media", "exact", [
+        "VIDEO_CX231XX", "VIDEO_EM28XX", "VIDEO_AU0828", "VIDEO_SAA7134",
+        "VIDEO_CX88", "VIDEO_IVTV", "VIDEO_ZORAN", "VIDEO_GO7007",
+        "VIDEO_CPIA2", "VIDEO_USBTV", "VIDEO_PVRUSB2", "VIDEO_HDPVR",
+        "VIDEO_STK1160",
+    ]),
 
     # 老旧文件系统
+    # NTFS_FS 为旧版只读/实验性 NTFS 驱动，NTFS3 已提供完整读写支持
     *rules("fs-old", "ns", [
-        "ADFS_FS", "AFFS_FS", "BEFS_FS", "BFS_FS", "CRAMFS", "EFS_FS",
-        "GFS2_FS", "HPFS_FS", "JFFS2_FS", "JFS_FS", "MINIX_FS",
-        "OCFS2_FS", "OMFS_FS", "QNX4FS_FS", "QNX6FS_FS",
+        "ADFS_FS", "AFFS_FS", "AFS_FS", "BEFS_FS", "BFS_FS", "CODA_FS",
+        "CRAMFS", "EFS_FS", "GFS2_FS", "HFS_FS", "HFSPLUS_FS", "HPFS_FS",
+        "INTERMEZZO_FS", "JFFS2_FS", "JFS_FS", "MINIX_FS", "NCP_FS",
+        "NTFS_FS", "OCFS2_FS", "OMFS_FS", "QNX4FS_FS", "QNX6FS_FS",
         "REISERFS_FS", "ROMFS_FS", "UBIFS_FS", "UFS_FS", "VXFS_FS",
     ]),
 
@@ -121,13 +142,33 @@ DISABLE_RULES = uniq_rules([
     ]),
 
     # 企业级网卡、RDMA 及 Intel 桌面/工作站网卡
-    # 目标平台使用 Realtek RTL8168/RTL8822CE，以下 Intel 网卡均无用
+    # 目标平台使用 Realtek RTL8168/RTL8822CE，以下网卡均无用
     *rules("nic", "prefix", [
         "3C", "BE2NET", "BNA", "BNX", "CHELSIO", "CXGB", "FM10K",
         "I40E", "ICE", "INFINIBAND", "IXGB", "MLX",
         "NET_VENDOR_CHELSIO", "NET_VENDOR_EMULEX", "NET_VENDOR_MELLANOX",
         "NET_VENDOR_QLOGIC", "NET_VENDOR_SOLARFLARE", "QED", "QLA", "QLCNIC", "RDMA", "SFC",
         "E1000", "IGB", "IGC", "IAVF", "IGBVF",  # Intel 桌面/工作站网卡
+    ]),
+    *rules("nic", "exact", [
+        "BNXT", "BNXT_HWMON",      # Broadcom NetXtreme-C/E
+        "MYRI10GE",                # Myricom 10GbE
+        "NETXEN_NIC",              # QLogic/NetXen
+        "NFP",                     # Netronome
+        "THUNDER_NIC_PF",          # Cavium ThunderX
+        "THUNDER_NIC_VF",
+        "LIQUIDIO",                # Cavium LiquidIO
+        "ATL1", "ATL1E", "ATL1C", "ALX",  # Atheros/Attansic/Qualcomm Ethernet
+        "SKY2", "SKGE",            # Marvell Yukon
+        "JME",                     # JMicron
+        "VORTEX", "TYPHOON",       # 3Com
+        "YELLOWFIN",               # Packet Engines
+        "SIS900", "SIS190",        # SiS Ethernet
+        "VIA_RHINE", "VIA_VELOCITY", # VIA Ethernet
+        "ULI526X",                 # ALi Ethernet
+        "FEALNX",                  # Farallon
+        "CS89x0",                  # Crystal Semiconductor
+        "LAN743X",                 # Microchip LAN743x
     ]),
     *rules("nic", "ns", ["AMD8111_ETH", "AMD_PHY", "AMD_QDMA", "AMD_XGBE"]),
 
@@ -141,6 +182,12 @@ DISABLE_RULES = uniq_rules([
     *rules("laptop", "ns", [
         "AMD_ISP_PLATFORM",
         "HP_ACCEL", "HP_BIOSCFG", "HP_ILO", "HP_WATCHDOG", "HP_WMI", "SURFACE3_WMI",
+    ]),
+    *rules("laptop", "exact", [
+        "FUJITSU_LAPTOP", "FUJITSU_TABLET",  # Fujitsu 笔记本/平板
+        "LENOVO_YOGA", "IDEAPAD_LAPTOP",      # 联想 Yoga/IdeaPad（非 QiTian 桌面）
+        "THINKPAD_ACPI",                      # ThinkPad 专属 ACPI
+        "TOPSTAR_LAPTOP", "COMPAL_LAPTOP",    # 代工品牌
     ]),
 
     # 多余 HDA codec
@@ -198,6 +245,19 @@ DISABLE_RULES = uniq_rules([
         "PERF_EVENTS_INTEL_UNCORE",  # Intel uncore 性能事件
         "PERF_EVENTS_INTEL_RAPL",    # Intel RAPL 性能事件
         "PERF_EVENTS_INTEL_CSTATE",  # Intel C-state 性能事件（Intel 专属）
+    ]),
+
+    # 虚拟机客户机驱动
+    # 目标内核运行于裸机桌面，无需 Hyper-V/Xen/KVM/VMware 客户机支持
+    *rules("virt-guest", "exact", [
+        "HYPERV", "HYPERV_BALLOON", "HYPERV_STORAGE", "HYPERV_NET",
+        "HYPERV_UTILS", "HYPERV_KEYBOARD",
+        "XEN", "XEN_BLKDEV_FRONTEND", "XEN_NETDEV_FRONTEND",
+        "KVM_GUEST",
+        "VMWARE_BALLOON", "VMWARE_PVSCSI", "VMWARE_VMCI",
+    ]),
+    *rules("virt-guest", "ns", [
+        "PARAVIRT",       # 半虚拟化基础设施（Hyper-V/Xen/KVM 客户机需要）
     ]),
 ])
 
